@@ -1,15 +1,7 @@
-﻿namespace MyJournalApp.Data.Models
+﻿using MyJournalApp.Data.Models;
+
+public class Student:Client
 {
-    public class Student
-    {
-        public Guid Id { get; set; } = Guid.NewGuid();
-        public string FullName { get; set; } = null!;
-        public string Email { get; set; } = null!;
-
-        public Guid GroupId { get; set; }
-        public Group Group { get; set; } = null!;
-
-        public List<Grade> Grades { get; set; } = new();
-    }
-
+    public Guid GroupId { get; set; }
+    public List<Guid> GradeIds { get; set; } = new();
 }

@@ -6,7 +6,7 @@
         public string Name { get; set; } = null!;
 
         // Навигационное свойство
-        public List<Student> Students { get; set; } = new();
+        public List<Guid> Students { get; set; } = new();
     }
 
 }

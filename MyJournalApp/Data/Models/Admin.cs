@@ -1,6 +1,5 @@
-﻿namespace MyJournalApp.Data.Models
+﻿using MyJournalApp.Data.Models;
+
+public class Admin:Client
 {
-    public class Admin
-    {
-    }
 }

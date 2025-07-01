@@ -12,8 +12,8 @@ using MyJournalApp.Data;
 namespace MyJournalApp.Migrations
 {
     [DbContext(typeof(JournalDbContext))]
-    [Migration("20250628210149_Initial")]
-    partial class Initial
+    [Migration("20250701113404_AddClientTPT")]
+    partial class AddClientTPT
     {
         /// <inheritdoc />
         protected override void BuildTargetModel(ModelBuilder modelBuilder)
@@ -25,13 +25,17 @@ namespace MyJournalApp.Migrations
 
             SqlServerModelBuilderExtensions.UseIdentityColumns(modelBuilder);
 
-            modelBuilder.Entity("MyJournalApp.Data.Models.Course", b =>
+            modelBuilder.Entity("Course", b =>
                 {
                     b.Property<Guid>("Id")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uniqueidentifier");
 
                     b.Property<string>("Description")
+                        .IsRequired()
+                        .HasColumnType("nvarchar(max)");
+
+                    b.PrimitiveCollection<string>("GradeIds")
                         .IsRequired()
                         .HasColumnType("nvarchar(max)");
 
@@ -44,7 +48,7 @@ namespace MyJournalApp.Migrations
                     b.ToTable("Courses");
                 });
 
-            modelBuilder.Entity("MyJournalApp.Data.Models.Grade", b =>
+            modelBuilder.Entity("Grade", b =>
                 {
                     b.Property<Guid>("Id")
                         .ValueGeneratedOnAdd()
@@ -67,13 +71,36 @@ namespace MyJournalApp.Migrations
 
                     b.HasKey("Id");
 
-                    b.HasIndex("CourseId");
-
-                    b.HasIndex("StudentId");
-
-                    b.HasIndex("TeacherId");
-
                     b.ToTable("Grades");
+                });
+
+            modelBuilder.Entity("MyJournalApp.Data.Models.Client", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("Email")
+                        .IsRequired()
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<string>("FullName")
+                        .IsRequired()
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<string>("Password")
+                        .IsRequired()
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<string>("Role")
+                        .IsRequired()
+                        .HasColumnType("nvarchar(max)");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("Clients", (string)null);
+
+                    b.UseTptMappingStrategy();
                 });
 
             modelBuilder.Entity("MyJournalApp.Data.Models.Group", b =>
@@ -86,110 +113,72 @@ namespace MyJournalApp.Migrations
                         .IsRequired()
                         .HasColumnType("nvarchar(max)");
 
+                    b.PrimitiveCollection<string>("Students")
+                        .IsRequired()
+                        .HasColumnType("nvarchar(max)");
+
                     b.HasKey("Id");
 
                     b.ToTable("Groups");
                 });
 
-            modelBuilder.Entity("MyJournalApp.Data.Models.Student", b =>
+            modelBuilder.Entity("Admin", b =>
                 {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uniqueidentifier");
+                    b.HasBaseType("MyJournalApp.Data.Models.Client");
 
-                    b.Property<string>("Email")
+                    b.ToTable("Admins", (string)null);
+                });
+
+            modelBuilder.Entity("MyJournalApp.Data.Models.Teacher", b =>
+                {
+                    b.HasBaseType("MyJournalApp.Data.Models.Client");
+
+                    b.PrimitiveCollection<string>("Grades")
                         .IsRequired()
                         .HasColumnType("nvarchar(max)");
 
-                    b.Property<string>("FullName")
+                    b.ToTable("Teachers", (string)null);
+                });
+
+            modelBuilder.Entity("Student", b =>
+                {
+                    b.HasBaseType("MyJournalApp.Data.Models.Client");
+
+                    b.PrimitiveCollection<string>("GradeIds")
                         .IsRequired()
                         .HasColumnType("nvarchar(max)");
 
                     b.Property<Guid>("GroupId")
                         .HasColumnType("uniqueidentifier");
 
-                    b.HasKey("Id");
+                    b.ToTable("Students", (string)null);
+                });
 
-                    b.HasIndex("GroupId");
-
-                    b.ToTable("Students");
+            modelBuilder.Entity("Admin", b =>
+                {
+                    b.HasOne("MyJournalApp.Data.Models.Client", null)
+                        .WithOne()
+                        .HasForeignKey("Admin", "Id")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
                 });
 
             modelBuilder.Entity("MyJournalApp.Data.Models.Teacher", b =>
                 {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uniqueidentifier");
-
-                    b.Property<string>("Email")
-                        .IsRequired()
-                        .HasColumnType("nvarchar(max)");
-
-                    b.Property<string>("FullName")
-                        .IsRequired()
-                        .HasColumnType("nvarchar(max)");
-
-                    b.HasKey("Id");
-
-                    b.ToTable("Teachers");
-                });
-
-            modelBuilder.Entity("MyJournalApp.Data.Models.Grade", b =>
-                {
-                    b.HasOne("MyJournalApp.Data.Models.Course", "Course")
-                        .WithMany("Grades")
-                        .HasForeignKey("CourseId")
+                    b.HasOne("MyJournalApp.Data.Models.Client", null)
+                        .WithOne()
+                        .HasForeignKey("MyJournalApp.Data.Models.Teacher", "Id")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
+                });
 
-                    b.HasOne("MyJournalApp.Data.Models.Student", "Student")
-                        .WithMany("Grades")
-                        .HasForeignKey("StudentId")
+            modelBuilder.Entity("Student", b =>
+                {
+                    b.HasOne("MyJournalApp.Data.Models.Client", null)
+                        .WithOne()
+                        .HasForeignKey("Student", "Id")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
-
-                    b.HasOne("MyJournalApp.Data.Models.Teacher", "Teacher")
-                        .WithMany("Grades")
-                        .HasForeignKey("TeacherId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("Course");
-
-                    b.Navigation("Student");
-
-                    b.Navigation("Teacher");
-                });
-
-            modelBuilder.Entity("MyJournalApp.Data.Models.Student", b =>
-                {
-                    b.HasOne("MyJournalApp.Data.Models.Group", "Group")
-                        .WithMany("Students")
-                        .HasForeignKey("GroupId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("Group");
-                });
-
-            modelBuilder.Entity("MyJournalApp.Data.Models.Course", b =>
-                {
-                    b.Navigation("Grades");
-                });
-
-            modelBuilder.Entity("MyJournalApp.Data.Models.Group", b =>
-                {
-                    b.Navigation("Students");
-                });
-
-            modelBuilder.Entity("MyJournalApp.Data.Models.Student", b =>
-                {
-                    b.Navigation("Grades");
-                });
-
-            modelBuilder.Entity("MyJournalApp.Data.Models.Teacher", b =>
-                {
-                    b.Navigation("Grades");
                 });
 #pragma warning restore 612, 618
         }
