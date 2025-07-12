@@ -7,9 +7,18 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <Folder Include="Controllers\" />
-    <Folder Include="Interface\" />
-    <Folder Include="Repository\" />
+    <Compile Remove="Controllers\**" />
+    <Compile Remove="Interface\**" />
+    <Compile Remove="Repository\**" />
+    <Content Remove="Controllers\**" />
+    <Content Remove="Interface\**" />
+    <Content Remove="Repository\**" />
+    <EmbeddedResource Remove="Controllers\**" />
+    <EmbeddedResource Remove="Interface\**" />
+    <EmbeddedResource Remove="Repository\**" />
+    <None Remove="Controllers\**" />
+    <None Remove="Interface\**" />
+    <None Remove="Repository\**" />
   </ItemGroup>
 
   <ItemGroup>
