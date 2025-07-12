@@ -1,12 +1,7 @@
-﻿namespace MyJournalApp.Data.Models
+﻿public class Group
 {
-    public class Group
-    {
-        public Guid Id { get; set; } = Guid.NewGuid();
-        public string Name { get; set; } = null!;
-
-        // Навигационное свойство
-        public List<Student> Students { get; set; } = new();
-    }
-
+    public Guid Id { get; set; }
+    public string Name { get; set; }
+    public List<Guid>? StudentIds { get; set; }
+    public Guid TeacherId { get; set; }
 }
