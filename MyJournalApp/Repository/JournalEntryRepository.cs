@@ -6,10 +6,17 @@ public class JournalEntryRepository : Repository<JournalEntry>, IJournalEntryRep
 {
     public JournalEntryRepository(JournalDbContext context) : base(context) { }
 
-    public async Task<IEnumerable<JournalEntry>> GetByStudentIdAsync(Guid studentId)
+    public async Task<IEnumerable<JournalEntry>> GetByGroupIdAsync(Guid groupId)
     {
         return await _context.JournalEntries
-            .Where(j => j.StudentId == studentId)
+            .Where(j => j.GroupId == groupId)
             .ToListAsync();
     }
+    public async Task<IEnumerable<JournalEntry>> GetByTeacherIdAsync(Guid teacherId)
+    {
+        return await _context.JournalEntries
+            .Where(j => j.TeacherId.Contains(teacherId))
+            .ToListAsync();
+    }
+
 }

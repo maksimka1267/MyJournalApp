@@ -6,8 +6,11 @@ public class GroupRepository : Repository<Group>, IGroupRepository
 {
     public GroupRepository(JournalDbContext context) : base(context) { }
 
-    public async Task<Group?> GetByTeacherIdAsync(Guid teacherId)
+    public async Task<IEnumerable<Group>> GetByTeacherIdAsync(Guid teacherId)
     {
-        return await _context.Groups.FirstOrDefaultAsync(g => g.TeacherId == teacherId);
+        return await _context.Groups
+            .Where(g => g.TeacherId == teacherId)
+            .ToListAsync();
     }
+
 }

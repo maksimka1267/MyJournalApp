@@ -2,5 +2,6 @@
 
 public interface ITeacherRepository : IRepository<Teacher>
 {
-    Task<Teacher?> GetBySubjectIdAsync(Guid subjectId);
+    Task<Teacher?> GetByGroupIdAsync(Guid groupId);
+
 }

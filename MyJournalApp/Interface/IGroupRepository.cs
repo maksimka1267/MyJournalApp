@@ -2,5 +2,5 @@
 
 public interface IGroupRepository : IRepository<Group>
 {
-    Task<Group?> GetByTeacherIdAsync(Guid teacherId);
+    Task<IEnumerable<Group>> GetByTeacherIdAsync(Guid teacherId);
 }

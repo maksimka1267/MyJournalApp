@@ -12,4 +12,11 @@ public class ScheduleRepository : Repository<Schedule>, IScheduleRepository
             .Where(s => s.GroupId == groupId)
             .ToListAsync();
     }
+    public async Task<IEnumerable<Schedule>> GetByTeacherIdAsync(Guid teacherId)
+    {
+        return await _context.Schedules
+            .Where(s => s.TeacherId == teacherId)
+            .ToListAsync();
+    }
+
 }

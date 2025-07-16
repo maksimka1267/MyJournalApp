@@ -8,6 +8,8 @@ namespace MyJournalApp.Data
         public JournalDbContext(DbContextOptions<JournalDbContext> options) : base(options) { }
 
         public DbSet<Student> Students => Set<Student>();
+        public DbSet<Admin> Admins => Set<Admin>();
+        public DbSet<Grade> Grades => Set<Grade>();
         public DbSet<User> Users => Set<User>();
         public DbSet<Group> Groups => Set<Group>();
         public DbSet<Teacher> Teachers => Set<Teacher>();

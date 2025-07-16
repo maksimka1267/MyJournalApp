@@ -13,12 +13,13 @@ namespace MyJournalApp.Jwt
 
         public string GenerateToken(User user)
         {
-            //Claim[] claims = [new("clientId", client.Id.ToString())];
-
-            List<Claim> claims = new List<Claim>
-            {
-                new Claim("userid", user.Id.ToString())
-            };
+            var claims = new List<Claim>
+    {
+        new Claim(ClaimTypes.NameIdentifier, user.Id.ToString()),
+        new Claim(ClaimTypes.Email, user.Email),
+        new Claim(ClaimTypes.Role, user.Role),
+        new Claim("FullName", user.FullName)
+    };
 
             var signingCredentials = new SigningCredentials(
                 new SymmetricSecurityKey(Encoding.UTF8.GetBytes(_options.SecretKey)),
@@ -29,9 +30,7 @@ namespace MyJournalApp.Jwt
                 signingCredentials: signingCredentials,
                 expires: DateTime.UtcNow.AddHours(_options.ExpiresHours));
 
-            var tokenValue = new JwtSecurityTokenHandler().WriteToken(token);
-
-            return tokenValue;
+            return new JwtSecurityTokenHandler().WriteToken(token);
         }
     }
 

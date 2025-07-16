@@ -1,9 +1,7 @@
 ﻿namespace MyJournalApp.Data.Models
 {
-    public class Teacher
+    public class Admin
     {
         public Guid Id { get; set; }
-        public List<Guid> GroupIds { get; set; } = new();
     }
-
 }
