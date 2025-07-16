@@ -1,4 +1,5 @@
-﻿using Microsoft.AspNetCore.Authorization;
+﻿using ClosedXML.Excel;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using MyJournalApp.Auth;
 using MyJournalApp.Data;
@@ -53,42 +54,28 @@ public class AuthController : ControllerBase
             PasswordHash = _hasher.Generate(dto.Password)
         };
         await _userRepository.AddAsync(user);
-        // Создание дополнительных записей в зависимости от роли
+
         switch (dto.Role)
         {
             case "Student":
-                var student = new Student
-                {
-                    Id = userId
-                };
-                await _studentRepository.AddAsync(student);
+                await _studentRepository.AddAsync(new Student { Id = userId });
                 break;
-
             case "Teacher":
-                var teacher = new Teacher
-                {
-                    Id = userId
-                };
-                await _teacherRepository.AddAsync(teacher);
+                await _teacherRepository.AddAsync(new Teacher { Id = userId });
                 break;
-
             case "Admin":
-                var admin = new Admin
-                {
-                    Id = userId
-                };
-                await _adminRepository.AddAsync(admin);
+                await _adminRepository.AddAsync(new Admin { Id = userId });
                 break;
-
             default:
                 return BadRequest("Invalid role.");
         }
+
         await _userRepository.SaveChangesAsync();
         return Ok("Registered successfully");
     }
 
     [HttpPost("login")]
-    public async Task<IActionResult> Login([FromForm]LoginDto dto)
+    public async Task<IActionResult> Login([FromForm] LoginDto dto)
     {
         var user = await _userRepository.GetByEmail(dto.Email);
         if (user == null || !_hasher.Verify(dto.Password, user.PasswordHash))
@@ -125,17 +112,99 @@ public class AuthController : ControllerBase
         Response.Cookies.Delete("cookies");
         return Ok("Logged out");
     }
+
+    [Authorize]
+    [HttpPut("change-password")]
+    public async Task<IActionResult> ChangePassword([FromBody] ChangePasswordDto dto)
+    {
+        var userId = Guid.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
+        var user = await _userRepository.GetByIdAsync(userId);
+        if (user == null) return NotFound();
+
+        user.PasswordHash = _hasher.Generate(dto.NewPassword);
+        _userRepository.Update(user);
+        await _userRepository.SaveChangesAsync();
+
+        return Ok("Password updated");
+    }
+    [Authorize(Roles = "Admin")]
+    [HttpPost("bulk-register")]
+    public async Task<IActionResult> BulkRegister([FromForm] BulkRegisterDto dto)
+    {
+        if (dto.File == null || dto.File.Length == 0)
+            return BadRequest("Invalid file");
+
+        using var stream = new MemoryStream();
+        await dto.File.CopyToAsync(stream);
+        using var workbook = new XLWorkbook(stream);
+        var worksheet = workbook.Worksheets.FirstOrDefault();
+        if (worksheet == null) return BadRequest("No worksheet found");
+
+        foreach (var row in worksheet.RowsUsed().Skip(1)) // Пропустить заголовок
+        {
+            var fullName = row.Cell(2).GetValue<string>().Trim();
+            var email = row.Cell(3).GetValue<string>().Trim();
+
+            if (string.IsNullOrEmpty(fullName) || string.IsNullOrEmpty(email))
+                continue;
+
+            if (await _userRepository.GetByEmail(email) != null)
+                continue;
+
+            var id = Guid.NewGuid();
+            var user = new User
+            {
+                Id = id,
+                FullName = fullName,
+                Email = email,
+                Role = dto.Role,
+                PasswordHash = _hasher.Generate("test")
+            };
+
+            await _userRepository.AddAsync(user);
+
+            switch (dto.Role)
+            {
+                case "Student":
+                    await _studentRepository.AddAsync(new Student { Id = id });
+                    break;
+                case "Teacher":
+                    await _teacherRepository.AddAsync(new Teacher { Id = id });
+                    break;
+                default:
+                    continue;
+            }
+        }
+
+        await _userRepository.SaveChangesAsync();
+        await _studentRepository.SaveChangesAsync();
+        await _teacherRepository.SaveChangesAsync();
+
+        return Ok("Bulk registration complete");
+    }
+
+    // DTOs
     public class RegisterDto
     {
         public string FullName { get; set; }
         public string Email { get; set; }
         public string Password { get; set; }
-        public string Role { get; set; } // Student, Teacher, Admin, GroupLeader
+        public string Role { get; set; } // Student, Teacher, Admin
     }
+
     public class LoginDto
     {
         public string Email { get; set; }
         public string Password { get; set; }
     }
+    public class BulkRegisterDto
+    {
+        public IFormFile File { get; set; }
+        public string Role { get; set; }
+    }
 
+    public class ChangePasswordDto
+    {
+        public string NewPassword { get; set; }
+    }
 }
