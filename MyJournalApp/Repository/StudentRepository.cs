@@ -14,6 +14,12 @@ namespace MyJournalApp.Repository
                 .Where(s => s.GroupId == groupId)
                 .ToListAsync();
         }
+        public async Task<List<User>> GetAllStudentsAsync()
+        {
+            return await _context.Users
+                .Where(u => u.Role == "Student")
+                .ToListAsync();
+        }
     }
 
 }

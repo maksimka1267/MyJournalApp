@@ -25,11 +25,16 @@ public class JournalController : ControllerBase
     [HttpGet("my")]
     public async Task<IActionResult> GetMy()
     {
-        var teacherId = Guid.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
+        var userId = User.FindFirstValue(ClaimTypes.NameIdentifier);
+        var roles = User.FindAll(ClaimTypes.Role).Select(r => r.Value);
+
+        Console.WriteLine($"➡️ USER ID: {userId}");
+        Console.WriteLine($"➡️ ROLES: {string.Join(", ", roles)}");
+
+        var teacherId = Guid.Parse(userId!);
         var journals = await _journalRepo.GetByTeacherIdAsync(teacherId);
         return Ok(journals);
     }
-
     [Authorize]
     [HttpGet("{id}")]
     public async Task<IActionResult> Get(Guid id)
@@ -66,7 +71,7 @@ public class JournalController : ControllerBase
         return Ok(existing);
     }
 
-    [Authorize(Roles = "Admin,Teacher")]
+    [Authorize(Roles = "Admin")]
     [HttpDelete("{id}")]
     public async Task<IActionResult> Delete(Guid id)
     {

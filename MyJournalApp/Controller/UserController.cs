@@ -1,0 +1,135 @@
+﻿using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
+using MyJournalApp.Data.Models;
+using MyJournalApp.Interface;
+
+namespace MyJournalApp.Controllers;
+
+[ApiController]
+[Route("api/[controller]")]
+public class UserController : ControllerBase
+{
+    private readonly IStudentRepository _studentRepository;
+    private readonly IUserRepository _userRepository;
+    private readonly ITeacherRepository _teacherRepository;
+
+    public UserController(
+        IStudentRepository studentRepository,
+        ITeacherRepository teacherRepository,
+        IUserRepository userRepository)
+    {
+        _studentRepository = studentRepository;
+        _teacherRepository = teacherRepository;
+        _userRepository = userRepository;
+    }
+    [Authorize(Roles = "Admin")]
+    [HttpPut("update-teacher-admin")]
+    public async Task<IActionResult> UpdateTeacherAdmin([FromBody] UpdateTeacherAdminDto dto)
+    {
+        var teacher = await _teacherRepository.GetByIdAsync(dto.TeacherId);
+        if (teacher == null)
+            return NotFound("Teacher not found");
+
+        teacher.IsAdmin = dto.IsAdmin;
+        await _teacherRepository.Update(teacher);
+        await _teacherRepository.SaveChangesAsync();
+
+        return Ok("Teacher admin status updated");
+    }
+
+    public class UpdateTeacherAdminDto
+    {
+        public Guid TeacherId { get; set; }
+        public bool IsAdmin { get; set; }
+    }
+    [Authorize(Roles = "Admin")]
+    [HttpGet("teachers-admin-status")]
+    public async Task<IActionResult> GetTeachersAdminStatus()
+    {
+        var teachers = await _teacherRepository.GetAllTeachersWithAdminAsync();
+        return Ok(teachers);
+    }
+    // Отримати всіх вчителів
+    [Authorize]
+    [HttpGet("teachers")]
+    public async Task<IActionResult> GetAllTeachers()
+    {
+        var teachers = await _teacherRepository.GetAllTeachersAsync();
+        return Ok(teachers);
+    }
+    // Отримати всіх користувачів
+    [Authorize]
+    [HttpGet("users")]
+    public async Task<IActionResult> GetAllAsync()
+    {
+        var users = await _userRepository.GetAllAsync();
+        return Ok(users);
+    }
+    // Отримати всіх студентів
+    [Authorize]
+    [HttpGet("students")]
+    public async Task<IActionResult> GetAllStudents()
+    {
+        var students = await _studentRepository.GetAllStudentsAsync();
+        return Ok(students);
+    }
+    [Authorize(Roles = "Admin")]
+    [HttpPut("{studentId}/change-group/{newGroupId}")]
+    public async Task<IActionResult> ChangeGroup(Guid studentId, Guid newGroupId)
+    {
+        var student = await _studentRepository.GetByIdAsync(studentId);
+        if (student == null) return NotFound();
+
+        student.GroupId = newGroupId;
+        await _studentRepository.Update(student);
+
+        return NoContent();
+    }
+    [Authorize(Roles = "Admin")]
+    [HttpDelete("delete/{id}")]
+    public async Task<IActionResult> Delete(Guid id)
+    {
+        var user = await _userRepository.GetByIdAsync(id);
+        if (user == null) return NotFound();
+
+        await _userRepository.Delete(user);
+        await _userRepository.SaveChangesAsync();
+        return Ok();
+    }
+    [HttpDelete("delete-all")]
+    public async Task<IActionResult> DeleteAllUsers()
+    {
+        try
+        {
+            await _userRepository.DeleteAllAsync();
+            return Ok(new { message = "Усі користувачі видалені." });
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { message = "Ошибка при видалені користувачей", error = ex.Message });
+        }
+    }
+    // Отримати одного вчителя
+    [Authorize]
+    [HttpGet("teacher/{id}")]
+    public async Task<IActionResult> GetTeacherById(Guid id)
+    {
+        var teacher = await _userRepository.GetByIdAsync(id);
+        return teacher is null ? NotFound() : Ok(teacher);
+    }
+    [Authorize]
+    [HttpGet("teacher-model/{id}")]
+    public async Task<IActionResult> GetTeacherModelById(Guid id)
+    {
+        var teacher = await _teacherRepository.GetByIdAsync(id);
+        return teacher is null ? NotFound() : Ok(teacher);
+    }
+    // Отримати одного студента
+    [Authorize]
+    [HttpGet("student/{id}")]
+    public async Task<IActionResult> GetStudentById(Guid id)
+    {
+        var student = await _studentRepository.GetByIdAsync(id);
+        return student is null ? NotFound() : Ok(student);
+    }
+}

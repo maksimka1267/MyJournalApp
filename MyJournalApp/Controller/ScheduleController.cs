@@ -1,91 +1,127 @@
-﻿using Microsoft.AspNetCore.Authorization;
-using Microsoft.AspNetCore.Mvc;
-using MyJournalApp.Data.Models;
-using MyJournalApp.Interface;
+﻿using Microsoft.AspNetCore.Mvc;
 
 [ApiController]
 [Route("api/[controller]")]
 public class ScheduleController : ControllerBase
 {
-    private readonly IScheduleRepository _scheduleRepo;
+    private readonly IScheduleRepository _scheduleRepository;
+    private readonly ILessonRepository _lessonRepository;
 
-    public ScheduleController(IScheduleRepository scheduleRepo)
+    public ScheduleController(IScheduleRepository scheduleRepository, ILessonRepository lessonRepository)
     {
-        _scheduleRepo = scheduleRepo;
+        _scheduleRepository = scheduleRepository;
+        _lessonRepository = lessonRepository;
     }
 
-    [HttpGet("group/{groupId}")]
-    public async Task<IActionResult> GetScheduleForGroup(Guid groupId)
+    [HttpGet]
+    public async Task<IActionResult> GetAll()
     {
-        var schedule = await _scheduleRepo.GetByGroupIdAsync(groupId);
+        var schedules = await _scheduleRepository.GetAllAsync();
+        return Ok(schedules);
+    }
+
+    [HttpGet("{id}")]
+    public async Task<IActionResult> GetById(Guid id)
+    {
+        var schedule = await _scheduleRepository.GetByIdAsync(id);
+        if (schedule == null) return NotFound();
         return Ok(schedule);
     }
 
-    [HttpGet("teacher/{teacherId}")]
-    public async Task<IActionResult> GetScheduleForTeacher(Guid teacherId)
+    [HttpGet("group/{groupId}/week/{weekStart}")]
+    public async Task<IActionResult> GetByGroupAndWeek(Guid groupId, string weekStart)
     {
-        var schedule = await _scheduleRepo.GetByTeacherIdAsync(teacherId);
+        if (!DateOnly.TryParse(weekStart, out var weekStartDate))
+            return BadRequest("Invalid date format. Use YYYY-MM-DD.");
+
+        var schedule = await _scheduleRepository.GetByGroupAndWeekAsync(groupId, weekStartDate);
+        if (schedule == null) return NotFound();
+
         return Ok(schedule);
     }
 
-    [Authorize(Roles = "Admin,Teacher")]
     [HttpPost]
-    public async Task<IActionResult> AddLesson([FromBody] ScheduleDto dto)
+    public async Task<IActionResult> Create(Schedule schedule)
     {
-        var lesson = new Schedule
+        if (!ModelState.IsValid)
+            return BadRequest(ModelState);
+
+        try
         {
-            Id = Guid.NewGuid(),
-            GroupId = dto.GroupId,
-            Date = dto.Date,
-            Subject = dto.Subject,
-            TeacherId = dto.TeacherId,
-            Room = dto.Room
-        };
+            // Проверка, не существует ли уже расписание
+            var existing = await _scheduleRepository.GetByGroupAndWeekAsync(schedule.GroupId, schedule.WeekStartDate);
+            if (existing != null)
+                return Conflict("Schedule already exists for this group and week.");
 
-        await _scheduleRepo.AddAsync(lesson);
-        await _scheduleRepo.SaveChangesAsync();
+            // Проверка всех уроков
+            foreach (var lessonId in schedule.Lessons)
+            {
+                var lesson = await _lessonRepository.GetByIdAsync(lessonId);
+                if (lesson == null)
+                    return BadRequest($"Lesson with ID {lessonId} does not exist.");
+            }
 
-        return Ok(lesson);
+            await _scheduleRepository.AddAsync(schedule);
+            await _scheduleRepository.SaveChangesAsync();
+
+            return CreatedAtAction(nameof(GetById), new { id = schedule.Id }, schedule);
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, $"Server error: {ex.Message}");
+        }
     }
 
-    [Authorize(Roles = "Admin,Teacher")]
     [HttpPut("{id}")]
-    public async Task<IActionResult> UpdateLesson(Guid id, [FromBody] ScheduleDto dto)
+    public async Task<IActionResult> Update(Guid id, Schedule updated)
     {
-        var existing = await _scheduleRepo.GetByIdAsync(id);
-        if (existing == null) return NotFound();
+        if (!ModelState.IsValid)
+            return BadRequest(ModelState);
 
-        existing.GroupId = dto.GroupId;
-        existing.Date = dto.Date;
-        existing.Subject = dto.Subject;
-        existing.TeacherId = dto.TeacherId;
-        existing.Room = dto.Room;
+        try
+        {
+            var existing = await _scheduleRepository.GetByIdAsync(id);
+            if (existing == null) return NotFound();
 
-        _scheduleRepo.Update(existing);
-        await _scheduleRepo.SaveChangesAsync();
+            // Проверка всех уроков
+            foreach (var lessonId in updated.Lessons)
+            {
+                var lesson = await _lessonRepository.GetByIdAsync(lessonId);
+                if (lesson == null)
+                    return BadRequest($"Lesson with ID {lessonId} does not exist.");
+            }
 
-        return Ok(existing);
+            existing.GroupId = updated.GroupId;
+            existing.WeekStartDate = updated.WeekStartDate;
+            existing.Lessons = updated.Lessons;
+
+            await _scheduleRepository.Update(existing);
+            await _scheduleRepository.SaveChangesAsync();
+
+            return NoContent();
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, $"Server error: {ex.Message}");
+        }
     }
 
-    [Authorize(Roles = "Admin,Teacher")]
     [HttpDelete("{id}")]
-    public async Task<IActionResult> DeleteLesson(Guid id)
+    public async Task<IActionResult> Delete(Guid id)
     {
-        var lesson = await _scheduleRepo.GetByIdAsync(id);
-        if (lesson == null) return NotFound();
+        try
+        {
+            var existing = await _scheduleRepository.GetByIdAsync(id);
+            if (existing == null) return NotFound();
 
-        _scheduleRepo.Delete(lesson);
-        await _scheduleRepo.SaveChangesAsync();
+            await _scheduleRepository.Delete(existing);
+            await _scheduleRepository.SaveChangesAsync();
 
-        return Ok("Deleted");
+            return NoContent();
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, $"Server error: {ex.Message}");
+        }
     }
-    public class ScheduleDto
-    {
-        public Guid GroupId { get; set; }
-        public DateTime Date { get; set; }
-        public string Subject { get; set; }
-        public Guid TeacherId { get; set; }
-        public string Room { get; set; }
-    }
-
 }

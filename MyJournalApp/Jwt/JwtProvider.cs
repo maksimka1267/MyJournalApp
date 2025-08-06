@@ -18,7 +18,7 @@ namespace MyJournalApp.Jwt
         new Claim(ClaimTypes.NameIdentifier, user.Id.ToString()),
         new Claim(ClaimTypes.Email, user.Email),
         new Claim(ClaimTypes.Role, user.Role),
-        new Claim("FullName", user.FullName)
+        new Claim(ClaimTypes.Name, user.FullName)
     };
 
             var signingCredentials = new SigningCredentials(

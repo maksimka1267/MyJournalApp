@@ -11,4 +11,11 @@ public class GradeRepository : Repository<Grade>, IGradeRepository
             .Where(g => g.JournalEntryId == journalEntryId)
             .ToListAsync();
     }
+    public async Task<IEnumerable<Grade>> GetByStudentIdAsync(Guid studentId)
+    {
+        return await _context.Grades
+            .Where(g => g.StudentId == studentId)
+            .ToListAsync();
+    }
+
 }

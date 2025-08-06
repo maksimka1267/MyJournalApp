@@ -1,22 +1,14 @@
 ﻿using Microsoft.EntityFrameworkCore;
 using MyJournalApp.Data;
-using MyJournalApp.Data.Models;
 
 public class ScheduleRepository : Repository<Schedule>, IScheduleRepository
 {
     public ScheduleRepository(JournalDbContext context) : base(context) { }
 
-    public async Task<IEnumerable<Schedule>> GetByGroupIdAsync(Guid groupId)
+    public async Task<Schedule?> GetByGroupAndWeekAsync(Guid groupId, DateOnly weekStart)
     {
-        return await _context.Schedules
-            .Where(s => s.GroupId == groupId)
-            .ToListAsync();
+        return await _dbSet
+            .Include(s => s.Lessons)
+            .FirstOrDefaultAsync(s => s.GroupId == groupId && s.WeekStartDate == weekStart);
     }
-    public async Task<IEnumerable<Schedule>> GetByTeacherIdAsync(Guid teacherId)
-    {
-        return await _context.Schedules
-            .Where(s => s.TeacherId == teacherId)
-            .ToListAsync();
-    }
-
 }

@@ -27,22 +27,28 @@ public class GradeController : ControllerBase
 
     [Authorize]
     [HttpPost]
-    public async Task<IActionResult> Create([FromForm] Grade grade)
+    public async Task<IActionResult> Create([FromBody] Grade grade)
     {
-        grade.Id = Guid.NewGuid();
-
-        var journal = await _journalRepo.GetByIdAsync(grade.JournalEntryId);
-        if (journal == null)
-            return NotFound("Journal entry not found");
-
-        journal.Grades.Add(grade); // связь
-
-        _journalRepo.Update(journal); // можно, можно и _gradeRepo.AddAsync(grade)
-        await _journalRepo.SaveChangesAsync();
-
-        return Ok(grade);
+        try
+        {
+            Console.WriteLine("ID Journal:",grade.JournalEntryId);
+            Console.WriteLine("ID Student:",grade.StudentId);
+            Console.WriteLine("Value:",grade.Value);
+            Console.WriteLine("Comment:",grade.Comment);
+            if (grade.Value != 0)
+            {
+                await _gradeRepo.AddAsync(grade);
+                await _gradeRepo.SaveChangesAsync();
+            }
+            return Ok(grade);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"❌ Error saving grade: {ex.Message}");
+            Console.WriteLine(ex.StackTrace);
+            return StatusCode(500, $"Internal error: {ex.Message}");
+        }
     }
-
     [Authorize]
     [HttpPut("{id}")]
     public async Task<IActionResult> Update(Guid id, [FromBody] Grade grade)
@@ -56,6 +62,13 @@ public class GradeController : ControllerBase
         _gradeRepo.Update(existing);
         await _gradeRepo.SaveChangesAsync();
         return Ok(existing);
+    }
+    [Authorize(Roles = "Student")]
+    [HttpGet("byStudent/{studentId}")]
+    public async Task<IActionResult> GetByStudent(Guid studentId)
+    {
+        var grades = await _gradeRepo.GetByStudentIdAsync(studentId);
+        return Ok(grades);
     }
 
     [Authorize]

@@ -11,6 +11,7 @@ namespace MyJournalApp.Data
         public DbSet<Admin> Admins => Set<Admin>();
         public DbSet<Grade> Grades => Set<Grade>();
         public DbSet<User> Users => Set<User>();
+        public DbSet<Lesson> Lessons => Set<Lesson>();
         public DbSet<Group> Groups => Set<Group>();
         public DbSet<Teacher> Teachers => Set<Teacher>();
         public DbSet<Schedule> Schedules => Set<Schedule>();

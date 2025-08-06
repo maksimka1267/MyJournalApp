@@ -18,9 +18,21 @@ public class Repository<T> : IRepository<T> where T : class
 
     public async Task AddAsync(T entity) => await _dbSet.AddAsync(entity);
 
-    public void Update(T entity) => _dbSet.Update(entity);
-
-    public void Delete(T entity) => _dbSet.Remove(entity);
+    public async Task Update(T entity)
+    {
+        _dbSet.Update(entity);
+        await _context.SaveChangesAsync();
+    }
+    public async Task Delete(T entity)
+    {
+        _dbSet.Remove(entity);
+        await _context.SaveChangesAsync();
+    }
+    public async Task DeleteAllAsync()
+    {
+        _dbSet.RemoveRange(_dbSet);
+        await _context.SaveChangesAsync();
+    }
 
     public async Task SaveChangesAsync() => await _context.SaveChangesAsync();
 }

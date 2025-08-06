@@ -17,6 +17,7 @@ public class AuthController : ControllerBase
     private readonly IStudentRepository _studentRepository;
     private readonly ITeacherRepository _teacherRepository;
     private readonly IAdminRepository _adminRepository;
+    private readonly IGroupRepository _groupRepository;
     private readonly IUserRepository _userRepository;
     private readonly IPasswordHasher _hasher;
     private readonly IJwtProvider _jwtProvider;
@@ -26,7 +27,8 @@ public class AuthController : ControllerBase
                           IStudentRepository studentRepository,
                           ITeacherRepository teacherRepository,
                           IAdminRepository adminRepository,
-                          IUserRepository userRepository)
+                          IUserRepository userRepository,
+                          IGroupRepository groupRepository)
     {
         _adminRepository = adminRepository;
         _studentRepository = studentRepository;
@@ -34,6 +36,7 @@ public class AuthController : ControllerBase
         _hasher = hasher;
         _jwtProvider = jwtProvider;
         _userRepository = userRepository;
+        _groupRepository = groupRepository;
     }
 
     [HttpPost("register")]
@@ -75,7 +78,7 @@ public class AuthController : ControllerBase
     }
 
     [HttpPost("login")]
-    public async Task<IActionResult> Login([FromForm] LoginDto dto)
+    public async Task<IActionResult> Login([FromBody] LoginDto dto)
     {
         var user = await _userRepository.GetByEmail(dto.Email);
         if (user == null || !_hasher.Verify(dto.Password, user.PasswordHash))
@@ -110,8 +113,9 @@ public class AuthController : ControllerBase
     public IActionResult Logout()
     {
         Response.Cookies.Delete("cookies");
-        return Ok("Logged out");
+        return Redirect("/Account/Login"); // або твоя сторінка авторизації
     }
+
 
     [Authorize]
     [HttpPut("change-password")]
@@ -134,13 +138,16 @@ public class AuthController : ControllerBase
         if (dto.File == null || dto.File.Length == 0)
             return BadRequest("Invalid file");
 
+        if (dto.Role == "Student" && dto.GroupId == null)
+            return BadRequest("GroupId is required for student role");
+
         using var stream = new MemoryStream();
         await dto.File.CopyToAsync(stream);
         using var workbook = new XLWorkbook(stream);
         var worksheet = workbook.Worksheets.FirstOrDefault();
         if (worksheet == null) return BadRequest("No worksheet found");
 
-        foreach (var row in worksheet.RowsUsed().Skip(1)) // Пропустить заголовок
+        foreach (var row in worksheet.RowsUsed().Skip(1))
         {
             var fullName = row.Cell(2).GetValue<string>().Trim();
             var email = row.Cell(3).GetValue<string>().Trim();
@@ -166,11 +173,26 @@ public class AuthController : ControllerBase
             switch (dto.Role)
             {
                 case "Student":
-                    await _studentRepository.AddAsync(new Student { Id = id });
+                    await _studentRepository.AddAsync(new Student
+                    {
+                        Id = id,
+                        GroupId = dto.GroupId.Value
+                    });
+
+                    var group = await _groupRepository.GetByIdAsync(dto.GroupId.Value);
+                    if (group != null)
+                    {
+                        group.StudentIds ??= new List<Guid>();
+                        group.StudentIds.Add(id);
+                        await _groupRepository.Update(group); // Убедитесь, что метод обновления есть
+                    }
                     break;
+
+
                 case "Teacher":
                     await _teacherRepository.AddAsync(new Teacher { Id = id });
                     break;
+
                 default:
                     continue;
             }
@@ -182,7 +204,6 @@ public class AuthController : ControllerBase
 
         return Ok("Bulk registration complete");
     }
-
     // DTOs
     public class RegisterDto
     {
@@ -201,7 +222,9 @@ public class AuthController : ControllerBase
     {
         public IFormFile File { get; set; }
         public string Role { get; set; }
+        public Guid? GroupId { get; set; } // Только для студентов
     }
+
 
     public class ChangePasswordDto
     {

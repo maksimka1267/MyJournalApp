@@ -1,0 +1,280 @@
+﻿@page
+@model MyJournalApp.Pages.JournalModel
+@{
+    ViewData["Title"] = "Журнал";
+    Layout = "_Layout";
+
+    var selectedJournal = Model.Journals.FirstOrDefault(j => j.Id == Model.SelectedJournalId);
+    var groupName = selectedJournal != null && Model.GroupNames.TryGetValue(selectedJournal.GroupId, out var gn) ? gn : "";
+    var subjectName = selectedJournal?.Subject ?? "";
+    var topicHeaders = Model.TopicHeaders;
+    var grades = Model.SelectedJournalGrades;
+}
+
+<h2>Журнал</h2>
+@if (!ViewData.ModelState.IsValid)
+{
+    <div class="alert alert-danger">
+        @foreach (var error in ViewData.ModelState.Values.SelectMany(v => v.Errors))
+        {
+            <div>@error.ErrorMessage</div>
+        }
+    </div>
+}
+
+@if (Model.Role == "Admin")
+{
+    <button class="btn btn-primary mb-3" data-bs-toggle="modal" data-bs-target="#addJournalModal">
+        ➕ Додати журнал
+    </button>
+    <form method="post" asp-page-handler="DeleteAllJournals" onsubmit="return confirm('Усі журнали та оцінки будуть видалені. Продовжити?');">
+        @Html.AntiForgeryToken()
+        <p>Handler: @RouteData.Values["handler"]</p>
+
+        <button class="btn btn-danger">🗑 Видалити всі журнали</button>
+    </form>
+
+
+}
+
+@if (Model.Role == "Teacher" || Model.Role == "Admin")
+{
+    <div class="d-flex align-items-start gap-2 mb-4">
+
+        <!-- Выбор журнала (GET) -->
+        <form method="get">
+            <div class="input-group">
+                <select name="selectedJournalId" class="form-select" onchange="this.form.submit()">
+                    @foreach (var journal in Model.Journals)
+                    {
+                        var group = Model.GroupNames.GetValueOrDefault(journal.GroupId, "Група");
+                        var subject = journal.Subject ?? "Предмет";
+                        <option value="@journal.Id" selected="@(journal.Id == Model.SelectedJournalId)">
+                            @($"{subject} — {group} ({journal.Date:yyyy-MM-dd})")
+                        </option>
+                    }
+                </select>
+            </div>
+        </form>
+
+        <!-- Удаление журнала (POST) -->
+        @if (Model.Role == "Admin")
+        {
+            <form method="post" asp-page-handler="DeleteJournal" asp-route-id="@Model.SelectedJournalId"
+                  onsubmit="return confirm('Видалити цей журнал?');">
+                @Html.AntiForgeryToken()
+                <button type="submit" class="btn btn-outline-danger">🗑 Видалити журнал</button>
+            </form>
+
+        }
+
+    </div>
+}
+
+@if (selectedJournal != null)
+{
+    <div class="card mt-3">
+        <div class="card-body">
+            <h4>@subjectName — Група @groupName</h4>
+
+            @if (Model.Role == "Student")
+            {
+                var studentId = Model.UserId;
+
+                // Усі дати, коли студент отримував оцінки
+                var allDates = Model.Grades
+                .Where(g => g.StudentId == studentId)
+                .Select(g => g.Created.Date)
+                .Distinct()
+                .OrderBy(d => d)
+                .ToList();
+
+                <table class="table table-bordered mt-4">
+                    <thead class="table-light">
+                        <tr>
+                            <th>Предмет</th>
+                            @foreach (var date in allDates)
+                            {
+                                <th>@date.ToString("dd.MM.yyyy")</th>
+                            }
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var journal in Model.Journals)
+                        {
+                            var subject = journal.Subject;
+                            var studentGrades = Model.Grades
+                            .Where(g => g.JournalEntryId == journal.Id && g.StudentId == studentId)
+                            .ToList();
+
+                            <tr>
+                                <td>@subject</td>
+
+                                @foreach (var date in allDates)
+                                {
+                                    var grade = studentGrades.FirstOrDefault(g => g.Created.Date == date);
+                                    if (grade != null)
+                                    {
+                                        <td title="Тип: @grade.Comment, Вчитель: @(Model.Users.FirstOrDefault(u => u.Id == grade.TeacherId)?.FullName ?? "—")"
+                                            style="cursor: help;">
+                                            @grade.Value
+                                        </td>
+                                    }
+                                    else
+                                    {
+                                        <td>–</td>
+                                    }
+                                }
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            }
+
+            else
+            {
+                <form method="post" asp-page-handler="AddTopic">
+                    @Html.AntiForgeryToken()
+                    <table class="table table-bordered mt-3">
+                        <thead class="table-light">
+                            <tr>
+                                <th>Прізвище, Ім'я, По батькові</th>
+                                @foreach (var topic in topicHeaders)
+                                {
+                                    var gradeSample = Model.SelectedJournalGrades.FirstOrDefault(g => g.Comment == topic);
+                                    var dateLabel = gradeSample?.Created.ToString("dd.MM.yyyy") ?? "—";
+
+                                    <th>
+                                        @dateLabel
+                                        @if (Model.Role == "Admin")
+                                        {
+                                            <div class="small">Вчитель</div>
+                                        }
+                                    </th>
+                                }
+
+                                @if (Model.Role == "Teacher")
+                                {
+                                    <th>
+                                        <select name="NewTopic.Comment" class="form-select form-select-sm" required>
+                                            <option value="">-- Оберіть тип --</option>
+                                            <option value="Лабораторна робота">Лабораторна робота</option>
+                                            <option value="Домашнє завдання">Домашнє завдання</option>
+                                            <option value="Самостійна робота">Самостійна робота</option>
+                                            <option value="Контрольна робота">Контрольна робота</option>
+                                            <option value="Тестування">Тестування</option>
+                                        </select>
+                                    </th>
+                                }
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var student in Model.Students)
+                            {
+                                var fullName = Model.Users.FirstOrDefault(u => u.Id == student.Id)?.FullName ?? "—";
+
+                                <tr>
+                                    <td>@fullName</td>
+
+                                    @foreach (var topic in topicHeaders)
+                                    {
+                                        var grade = grades.FirstOrDefault(g =>
+                                        g.StudentId == student.Id &&
+                                        g.Comment == topic &&
+                                        g.JournalEntryId == selectedJournal.Id);
+
+                                        @if (Model.Role == "Admin")
+                                        {
+                                            var teacherName = grade != null
+                                            ? Model.Users.FirstOrDefault(u => u.Id == grade.TeacherId)?.FullName ?? "—"
+                                            : "—";
+
+                                            var value = grade?.Value.ToString() ?? "-";
+
+                                            <td>
+                                                <div><strong>@value</strong></div>
+                                                <div class="small text-muted">@teacherName</div>
+                                            </td>
+                                        }
+                                        else
+                                        {
+                                            <td>@(grade?.Value.ToString() ?? "-")</td>
+                                        }
+                                    }
+
+                                    @if (Model.Role == "Teacher")
+                                    {
+                                        <td>
+                                            <input type="number" name="NewTopic.Grades[@student.Id]" class="form-control" min="1" max="100" />
+                                        </td>
+                                    }
+                                </tr>
+                            }
+
+                            @if (Model.Role == "Teacher")
+                            {
+                                <tr>
+                                    <td colspan="@((topicHeaders.Count() + 2))" class="text-end">
+                                        <button type="submit" class="btn btn-primary">Зберегти</button>
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </form>
+            }
+        </div>
+    </div>
+}
+else
+{
+    <div class="alert alert-info mt-3">Оберіть журнал для перегляду.</div>
+}
+
+<!-- Модальне вікно створення журналу -->
+<div class="modal fade" id="addJournalModal" tabindex="-1" aria-labelledby="addJournalModalLabel" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <form method="post" asp-page-handler="CreateJournal">
+                @Html.AntiForgeryToken()
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label class="form-label">Предмет</label>
+                        <select name="NewJournal.Subject" class="form-select" required>
+                            <option value="">-- Оберіть предмет --</option>
+                            <option value="Зарубіжна література">Зарубіжна література</option>
+                            <option value="Фізика">Фізика</option>
+                            <option value="Хімія">Хімія</option>
+                            <option value="Англійська мова">Англійська мова</option>
+                            <option value="Інформатика">Інформатика</option>
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Група</label>
+                        <select name="NewJournal.GroupId" class="form-select" required>
+                            <option value="">-- Оберіть групу --</option>
+                            @foreach (var kvp in Model.GroupNames)
+                            {
+                                <option value="@kvp.Key">@kvp.Value</option>
+                            }
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Викладач</label>
+                        <select name="NewJournal.TeacherId" class="form-select" required>
+                            @foreach (var teacher in Model.Teachers)
+                            {
+                                var name = Model.TeacherNames.GetValueOrDefault(teacher.Id, "Невідомий");
+                                <option value="@teacher.Id">@name</option>
+                            }
+                        </select>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Скасувати</button>
+                    <button type="submit" class="btn btn-primary">Додати</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>

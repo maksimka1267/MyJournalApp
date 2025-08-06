@@ -1,0 +1,43 @@
+﻿@page
+@model StudentsModel
+@{
+    Layout = "_Layout";
+    ViewData["Title"] = "Студенти";
+}
+@if (TempData["Debug"] != null)
+{
+    <div class="alert alert-info">@TempData["Debug"]</div>
+}
+
+<h2 class="mb-4">Студенти</h2>
+
+<div class="row row-cols-1 row-cols-sm-2 row-cols-md-3 row-cols-lg-4 g-3 mb-4">
+    @foreach (var group in Model.GroupSummaries)
+    {
+        <div class="col">
+            <div class="card h-100 p-3">
+                <h6 class="mb-1">@group.Name</h6>
+                <p class="mb-0">Студентів: @group.StudentCount</p>
+            </div>
+        </div>
+    }
+</div>
+<table class="table table-bordered">
+    <thead class="table-light">
+        <tr>
+            <th>Прізвище, Ім’я, По батькові</th>
+            <th>Група</th>
+            <th>Email</th>
+        </tr>
+    </thead>
+    <tbody>
+        @foreach (var student in Model.Students)
+        {
+            <tr>
+                <td>@student.FullName</td>
+                <td><span class="badge bg-secondary">@student.GroupName</span></td>
+                <td>@student.Email</td>
+            </tr>
+        }
+    </tbody>
+</table>

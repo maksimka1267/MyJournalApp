@@ -1,37 +1,40 @@
 ﻿using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
-using MyJournalApp.Data.Models;
-using MyJournalApp.Interface;
 
 [ApiController]
 [Route("api/[controller]")]
 public class AcademicProcessController : ControllerBase
 {
     private readonly IAcademicEventRepository _eventRepository;
+    private readonly IGroupRepository _groupRepository;
 
-    public AcademicProcessController(IAcademicEventRepository eventRepository)
+    public AcademicProcessController(IAcademicEventRepository eventRepository,
+                                     IGroupRepository groupRepository)
     {
         _eventRepository = eventRepository;
+        _groupRepository = groupRepository;
     }
 
-    [HttpGet]
-    public async Task<IActionResult> GetAllEvents()
+    [HttpGet("{groupId}/{year}")]
+    public async Task<IActionResult> GetByGroupAndYear(Guid groupId, int year)
     {
-        var events = await _eventRepository.GetUpcomingAsync();
+        var events = await _eventRepository.GetByGroupAndYearAsync(groupId, year);
         return Ok(events);
     }
 
-    [Authorize(Roles = "Admin")]
     [HttpPost]
     public async Task<IActionResult> AddEvent([FromBody] AcademicEventDto dto)
     {
         var academicEvent = new AcademicEvent
         {
             Id = Guid.NewGuid(),
+            GroupId = dto.GroupId,
             Type = dto.Type,
+            Year = dto.Year,
+            Month = dto.Month,
+            WeekNumber = dto.WeekNumber,
             StartDate = dto.StartDate,
-            EndDate = dto.EndDate,
-            Description = dto.Description
+            EndDate = dto.EndDate
         };
 
         await _eventRepository.AddAsync(academicEvent);
@@ -40,7 +43,6 @@ public class AcademicProcessController : ControllerBase
         return Ok(academicEvent);
     }
 
-    [Authorize(Roles = "Admin")]
     [HttpPut("{id}")]
     public async Task<IActionResult> UpdateEvent(Guid id, [FromBody] AcademicEventDto dto)
     {
@@ -48,11 +50,13 @@ public class AcademicProcessController : ControllerBase
         if (existing == null) return NotFound();
 
         existing.Type = dto.Type;
+        existing.Year = dto.Year;
+        existing.Month = dto.Month;
+        existing.WeekNumber = dto.WeekNumber;
         existing.StartDate = dto.StartDate;
         existing.EndDate = dto.EndDate;
-        existing.Description = dto.Description;
 
-        _eventRepository.Update(existing);
+        await _eventRepository.Update(existing);
         await _eventRepository.SaveChangesAsync();
 
         return Ok(existing);
@@ -65,17 +69,48 @@ public class AcademicProcessController : ControllerBase
         var existing = await _eventRepository.GetByIdAsync(id);
         if (existing == null) return NotFound();
 
-        _eventRepository.Delete(existing);
+        await _eventRepository.Delete(existing);
         await _eventRepository.SaveChangesAsync();
 
         return Ok("Deleted");
     }
-    public class AcademicEventDto
+    [Authorize(Roles = "Admin")]
+    [HttpPut("bulk")]
+    public async Task<IActionResult> BulkUpdate([FromForm] List<AcademicEventDto> events)
     {
-        public string Type { get; set; } // "Practice", "Holiday", "ExamSession"
-        public DateTime StartDate { get; set; }
-        public DateTime EndDate { get; set; }
-        public string Description { get; set; }
+        foreach (var dto in events)
+        {
+            var existing = await _eventRepository.GetByIdAsync(dto.Id);
+            if (existing == null) continue;
+
+            existing.Type = dto.Type;
+            existing.Year = dto.Year;
+            existing.Month = dto.Month;
+            existing.WeekNumber = dto.WeekNumber;
+            existing.StartDate = dto.StartDate;
+            existing.EndDate = dto.EndDate;
+
+            await _eventRepository.Update(existing);
+        }
+
+        await _eventRepository.SaveChangesAsync();
+        return Ok();
     }
 
+    public class AcademicEventDto
+    {
+        public Guid Id { get; set; }
+        public Guid GroupId { get; set; }
+        public AcademicWeekType Type { get; set; }
+        public int Year { get; set; }
+        public int Month { get; set; }
+        public int WeekNumber { get; set; }
+        public DateTime StartDate { get; set; }
+        public DateTime EndDate { get; set; }
+    }
+
+    public class AcademicEventUploadDto
+    {
+        public IFormFile File { get; set; }
+    }
 }

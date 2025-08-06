@@ -1,0 +1,210 @@
+﻿@page
+@model UsersModel
+@using MyJournalApp.Data.Models
+@{
+    Layout = "_Layout";
+    ViewData["Title"] = "Користувачі";
+}
+
+<h2 class="mb-4 fw-bold">Користувачі</h2>
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <!-- 🔍 Форма поиска -->
+    <form method="get" class="d-flex gap-2">
+        <input name="search" value="@Model.SearchTerm" class="form-control" style="min-width: 250px;" placeholder="🔍 Пошук користувачів..." />
+        <select class="form-select" name="role">
+            <option value="">Всі ролі</option>
+            <option value="Student" @(Model.SelectedRole == "Student" ? "selected" : "")>Студент</option>
+            <option value="Teacher" @(Model.SelectedRole == "Teacher" ? "selected" : "")>Викладач</option>
+            <option value="Admin" @(Model.SelectedRole == "Admin" ? "selected" : "")>Адміністратор</option>
+        </select>
+
+        <button type="submit" class="btn btn-outline-secondary">🔄 Застосувати</button>
+    </form>
+
+    <div class="d-flex gap-2">
+        <button class="btn btn-outline-primary" data-bs-toggle="modal" data-bs-target="#uploadModal">
+            ⬆️ Завантажити Excel
+        </button>
+        <button class="btn btn-dark" data-bs-toggle="modal" data-bs-target="#createModal">
+            ➕ Додати користувача
+        </button>
+        <!-- 🗑 Кнопка удаления всех -->
+        <form method="post" onsubmit="return confirm('Ви впевнені, що хочете видалити всіх користувачів?');">
+            @Html.AntiForgeryToken()
+            <input type="hidden" name="id" value="" />
+            <button type="submit" class="btn btn-danger">
+                🗑 Видалити всіх
+            </button>
+        </form>
+    </div>
+</div>
+
+@if (Model.FilteredUsers.Any())
+{
+    <div class="card shadow-sm rounded-4">
+        <div class="card-body">
+            <h5 class="fw-semibold"><i class="bi bi-people"></i> Список користувачів (@Model.Users.Count)</h5>
+            <table class="table mt-3">
+                <thead>
+                    <tr>
+                        <th>Ім’я</th>
+                        <th>Email</th>
+                        <th>Роль</th>
+                        <th>Група</th>
+                        <th>Дії</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var user in Model.FilteredUsers)
+                    {
+                        var groupName = Model.GetGroupName(user.Id, user.Role);
+                        <tr>
+                            <td>@user.FullName</td>
+                            <td>@user.Email</td>
+                            <td>
+                                <span class="badge bg-light border text-dark">
+                                    @(user.Role switch
+                                    {
+                                        "Student" => "Студент",
+                                        "Teacher" => "Викладач",
+                                        "Admin" => "Адміністратор",
+                                        _ => user.Role
+                                    })
+                        </span>
+                    </td>
+                    <td>@groupName</td>
+                    <td>
+                        @if (user.Role == "Teacher")
+                                {
+                                    bool isAdmin = Model.TeacherAdminStatus.TryGetValue(user.Id, out var flag) && flag;
+                                    <form method="post" class="d-inline">
+                                        @Html.AntiForgeryToken()
+                                        <input type="hidden" name="TeacherId" value="@user.Id" />
+                                        <input type="hidden" name="IsAdminFlag" value="@(isAdmin ? "false" : "true")" />
+                                        <input type="checkbox" onchange="this.form.submit()" @(isAdmin ? "checked" : "") />
+                                    </form>
+                                }
+                            </td>
+
+                    <td>
+                        <!-- 🗑 Кнопка удаления одного -->
+                        <form method="post" class="d-inline" onsubmit="return confirm('Ви впевнені, що хочете видалити цього користувача?');">
+                            @Html.AntiForgeryToken()
+                            <input type="hidden" name="id" value="@user.Id" />
+                            <button type="submit" class="btn btn-danger btn-sm">🗑 Видалити</button>
+                        </form>
+                    </td>
+                </tr>
+                                }
+                </tbody>
+            </table>
+        </div>
+    </div>
+}
+else
+{
+    <p>Користувачів не знайдено.</p>
+}
+
+<!-- Модальное окно "Додати користувача" -->
+<div class="modal fade" id="createModal" tabindex="-1" aria-labelledby="createModalLabel" aria-hidden="true">
+    <div class="modal-dialog">
+        <form method="post">
+            @Html.AntiForgeryToken()
+            <div class="modal-content rounded-4">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="createModalLabel">Створити нового користувача</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label class="form-label">Ім’я</label>
+                        <input type="text" name="NewUser.FullName" class="form-control" required />
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Email</label>
+                        <input type="email" name="NewUser.Email" class="form-control" required />
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Пароль</label>
+                        <input type="password" name="NewUser.Password" class="form-control" required />
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Роль</label>
+                        <select class="form-select" name="NewUser.Role" id="createUserRole" required onchange="onRoleChange(this)">
+                            <option value="">Оберіть роль</option>
+                            <option value="Student">Студент</option>
+                            <option value="Teacher">Викладач</option>
+                            <option value="Admin">Адміністратор</option>
+                        </select>
+                    </div>
+                    <div class="mb-3 d-none" id="groupSelectContainer">
+                        <label class="form-label">Група</label>
+                        <select class="form-select" name="NewUser.GroupId">
+                            @foreach (var group in Model.Groups)
+                            {
+                                <option value="@group.Id">@group.Name</option>
+                            }
+                        </select>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="submit" class="btn btn-success">Створити</button>
+                </div>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- Модальное окно "Завантажити Excel" -->
+<div class="modal fade" id="uploadModal" tabindex="-1" aria-labelledby="uploadModalLabel" aria-hidden="true">
+    <div class="modal-dialog">
+        <form method="post" enctype="multipart/form-data">
+            @Html.AntiForgeryToken()
+            <div class="modal-content rounded-4">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="uploadModalLabel">Завантажити користувачів з Excel</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label class="form-label">Файл Excel</label>
+                        <input type="file" name="ExcelUpload.File" class="form-control" accept=".xlsx" required />
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Роль</label>
+                        <select class="form-select" name="ExcelUpload.Role" id="excelRoleSelect" required onchange="onExcelRoleChange(this)">
+                            <option value="">Оберіть роль</option>
+                            <option value="Student">Студент</option>
+                            <option value="Teacher">Викладач</option>
+                            <option value="Admin">Адміністратор</option>
+                        </select>
+                    </div>
+                    <div class="mb-3 d-none" id="excelGroupSelectContainer">
+                        <label class="form-label">Група</label>
+                        <select class="form-select" name="ExcelUpload.GroupId">
+                            @foreach (var group in Model.Groups)
+                            {
+                                <option value="@group.Id">@group.Name</option>
+                            }
+                        </select>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="submit" class="btn btn-success">Завантажити</button>
+                </div>
+            </div>
+        </form>
+    </div>
+</div>
+@section Scripts {
+    <script>
+        function onRoleChange(select) {
+            document.getElementById('groupSelectContainer').classList.toggle('d-none', select.value !== 'Student');
+        }
+        function onExcelRoleChange(select) {
+            document.getElementById('excelGroupSelectContainer').classList.toggle('d-none', select.value !== 'Student');
+        }
+    </script>
+}

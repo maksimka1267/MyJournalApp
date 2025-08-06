@@ -1,0 +1,137 @@
+﻿@page
+@using System.Globalization
+@model CalendarModel
+@{
+    ViewData["Title"] = "Графік навчального процесу";
+    Layout = "_Layout";
+
+    var isAdmin = Model.Role == "Admin";
+    var isEditMode = Request.Query["edit"] == "true";
+
+    var ukCulture = new CultureInfo("uk-UA");
+}
+
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h2>Графік навчального процесу</h2>
+
+    @if (isAdmin)
+    {
+        <div class="d-flex align-items-center justify-content-between mb-3">
+            <form method="get" class="d-flex align-items-center">
+                <select name="groupId" class="form-select me-2" onchange="this.form.submit()">
+                    @foreach (var group in Model.AllGroups)
+                    {
+                        <option value="@group.Id" selected="@(group.Id == Model.SelectedGroupId)">@group.Name</option>
+                    }
+                </select>
+
+                @if (!isEditMode)
+                {
+                    <a href="?groupId=@Model.SelectedGroupId&edit=true" class="btn btn-dark">
+                        <i class="bi bi-pencil-square"></i> Редагувати
+                    </a>
+                }
+            </form>
+
+            @if (isEditMode)
+            {
+                <form method="post" id="calendarForm">
+                    @Html.AntiForgeryToken()
+                    <button type="submit" form="calendarForm" class="btn btn-primary ms-3">
+                        <i class="bi bi-save"></i> Зберегти
+                    </button>
+                </form>
+            }
+        </div>
+    }
+</div>
+
+<div class="mb-3">
+    <strong>Легенда:</strong>
+    <span class="badge bg-primary">Теоретичні заняття</span>
+    <span class="badge bg-danger">Екзаменаційна сесія</span>
+    <span class="badge bg-success">Канікули</span>
+    <span class="badge bg-warning text-dark">Навчальна практика</span>
+    <span class="badge bg-secondary">Державний екзамен</span>
+    <span class="badge bg-info">Дипломування</span>
+</div>
+
+<form method="post" id="calendarForm">
+    <input type="hidden" name="SelectedGroupId" value="@Model.SelectedGroupId" />
+
+    @foreach (var monthGroup in Model.DisplayEvents.GroupBy(e => new { e.Month, e.Year }).OrderBy(g => g.Key.Year).ThenBy(g => g.Key.Month))
+    {
+        var monthName = ukCulture.DateTimeFormat.GetMonthName(monthGroup.Key.Month);
+
+        <div class="card p-3 mb-4">
+            <h5 class="mb-3">@monthName @monthGroup.Key.Year</h5>
+            <div class="d-flex flex-wrap gap-3">
+                @{
+                    int i = 0;
+                }
+                @foreach (var week in monthGroup.OrderBy(w => w.WeekNumber))
+                {
+                    var startDateStr = week.StartDate.ToString("dd.MM", ukCulture);
+                    var endDateStr = week.EndDate.ToString("dd.MM", ukCulture);
+
+                    <div class="text-center p-2 rounded shadow-sm" style="width: 150px; background-color: var(--bs-light);">
+                        <div class="fw-bold">@startDateStr – @endDateStr</div>
+
+                        @if (isEditMode && isAdmin)
+                        {
+                            <input type="hidden" name="EditableEvents[@i].Id" value="@week.Id" />
+                            <input type="hidden" name="EditableEvents[@i].GroupId" value="@Model.SelectedGroupId" />
+                            <input type="hidden" name="EditableEvents[@i].Year" value="@week.Year" />
+                            <input type="hidden" name="EditableEvents[@i].WeekNumber" value="@week.WeekNumber" />
+                            <input type="hidden" name="EditableEvents[@i].StartDate" value="@week.StartDate.ToString("yyyy-MM-dd")" />
+                            <input type="hidden" name="EditableEvents[@i].EndDate" value="@week.EndDate.ToString("yyyy-MM-dd")" />
+                            <select class="form-select form-select-sm mt-2" name="EditableEvents[@i].Type">
+                                @foreach (var val in Enum.GetValues(typeof(AcademicWeekType)))
+                                {
+                                    <option value="@val" selected="@(val.Equals(week.Type))">@GetTypeDisplayName(val.ToString())</option>
+                                }
+                            </select>
+                        }
+                        else
+                        {
+                            <span class="badge bg-@GetColor(week.Type) mt-2">@GetTypeDisplayName(week.Type.ToString())</span>
+                        }
+                    </div>
+                    i++;
+                }
+            </div>
+        </div>
+    }
+</form>
+
+@functions {
+    string GetTypeDisplayName(string type) => type switch
+    {
+        "Lecture" => "Теоретичні заняття",
+        "ExamSession" => "Екзаменаційна сесія",
+        "Vacation" => "Канікули",
+        "Practice" => "Навчальна практика",
+        "StateExam" => "Державний екзамен",
+        "WorkshopPractice" => "Практика у майстерні",
+        "GeoPractice" => "Геодезична практика",
+        "FieldPractice" => "Практика на об'єктах",
+        "ResearchWork" => "Оспоряджувальні роботи",
+        "DiplomaDefense" => "Захист дипломного проекту",
+        "TechnologyPractice" => "Технологічна практика",
+        "PreDiplomaPractice" => "Переддипломна практика",
+        "Diploma" => "Дипломування",
+        "StateCertification" => "Державна атестація",
+        _ => type
+    };
+
+    string GetColor(AcademicWeekType type) => type switch
+    {
+        AcademicWeekType.Lecture => "primary",
+        AcademicWeekType.ExamSession => "danger",
+        AcademicWeekType.Vacation => "success",
+        AcademicWeekType.Practice => "warning",
+        AcademicWeekType.StateExam => "secondary",
+        AcademicWeekType.Diploma => "info",
+        _ => "light"
+    };
+}

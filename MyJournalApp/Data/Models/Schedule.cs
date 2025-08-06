@@ -1,9 +1,9 @@
 ﻿public class Schedule
 {
-    public Guid Id { get; set; }
+    public Guid Id { get; set; } = Guid.NewGuid();
     public Guid GroupId { get; set; }
-    public DateTime Date { get; set; }
-    public string Subject { get; set; }
-    public Guid TeacherId { get; set; }
-    public string Room { get; set; }
+
+    public DateOnly WeekStartDate { get; set; } // Например, понедельник этой недели
+    public List<Guid> Lessons { get; set; }
+
 }

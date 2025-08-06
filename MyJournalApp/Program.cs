@@ -1,19 +1,33 @@
 ﻿using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
-using Microsoft.OpenApi.Models;
 using MyJournalApp.Auth;
 using MyJournalApp.Data;
 using MyJournalApp.Data.Models;
 using MyJournalApp.Interface;
 using MyJournalApp.Jwt;
 using MyJournalApp.Repository;
+using MyJournalApp.Service;
 using System.Text;
 
 var builder = WebApplication.CreateBuilder(args);
 
 // Add MVC + Razor Pages
 builder.Services.AddControllersWithViews();
+builder.Services.AddRazorPages(); // ✅ Razor Pages support
+
+// HTTP Client for API calls in Razor Pages
+builder.Services.AddHttpClient("ApiClient", client =>
+{
+    client.BaseAddress = new Uri("https://localhost:7120/");
+});
+// ✅ Required for Login Razor Page
+builder.Services.AddHttpContextAccessor();
+builder.Services.Configure<JsonOptions>(options =>
+{
+    options.JsonSerializerOptions.Converters.Add(new DateOnlyJsonConverter());
+});
 
 // Database
 builder.Services.AddDbContext<JournalDbContext>(options =>
@@ -60,57 +74,49 @@ builder.Services.AddScoped<ITeacherRepository, TeacherRepository>();
 builder.Services.AddScoped<IGradeRepository, GradeRepository>();
 builder.Services.AddScoped<IAdminRepository, AdminRepository>();
 builder.Services.AddScoped<IUserRepository, UserRepository>();
+builder.Services.AddScoped<ILessonRepository, LessonRepository>();
 builder.Services.AddScoped<IGroupRepository, GroupRepository>();
 builder.Services.AddScoped<IJournalEntryRepository, JournalEntryRepository>();
 builder.Services.AddScoped<IScheduleRepository, ScheduleRepository>();
 builder.Services.AddScoped<IAcademicEventRepository, AcademicEventRepository>();
-
-// Swagger
 builder.Services.AddEndpointsApiExplorer();
-builder.Services.AddSwaggerGen(c =>
-{
-    c.SwaggerDoc("v1", new OpenApiInfo
-    {
-        Title = "College Journal API",
-        Version = "v1"
-    });
-
-    c.AddSecurityDefinition("Bearer", new OpenApiSecurityScheme
-    {
-        Description = "JWT Authorization header using the Bearer scheme. Example: 'Bearer {token}'",
-        Name = "Authorization",
-        In = ParameterLocation.Header,
-        Type = SecuritySchemeType.Http,
-        Scheme = "bearer",
-        BearerFormat = "JWT"
-    });
-
-    c.AddSecurityRequirement(new OpenApiSecurityRequirement
-    {
-        {
-            new OpenApiSecurityScheme
-            {
-                Reference = new OpenApiReference { Type = ReferenceType.SecurityScheme, Id = "Bearer" }
-            },
-            Array.Empty<string>()
-        }
-    });
-});
+builder.Services.AddSwaggerGen();
 
 var app = builder.Build();
+if (app.Environment.IsDevelopment())
+{
+    app.UseSwagger();
+    app.UseSwaggerUI(options =>
+    {
+        options.SwaggerEndpoint("/swagger/v1/swagger.json", "MyJournal API v1");
+        options.RoutePrefix = "swagger"; // доступ будет по /swagger
+    });
+}
 
-// Middleware
 app.UseStaticFiles();
 app.UseRouting();
 
-app.UseAuthentication(); // JWT
+app.UseCookiePolicy(); // 🔥 Додай це!
+app.UseAuthentication();
 app.UseAuthorization();
 
-app.UseSwagger();
-app.UseSwaggerUI(c =>
+app.MapGet("/", async context =>
 {
-    c.SwaggerEndpoint("/swagger/v1/swagger.json", "College Journal API V1");
+    if (!context.User.Identity?.IsAuthenticated ?? true)
+    {
+        context.Response.Redirect("/Account/Login");
+    }
+    else
+    {
+        context.Response.Redirect("/Index");
+    }
+
+    await Task.CompletedTask;
 });
 
-app.MapDefaultControllerRoute();
+
+app.MapRazorPages();
+app.MapControllers();
+
 app.Run();
+

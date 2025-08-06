@@ -18,5 +18,4 @@ public class JournalEntryRepository : Repository<JournalEntry>, IJournalEntryRep
             .Where(j => j.TeacherId.Contains(teacherId))
             .ToListAsync();
     }
-
 }
