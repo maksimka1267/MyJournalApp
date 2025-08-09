@@ -32,16 +32,6 @@
                     </a>
                 }
             </form>
-
-            @if (isEditMode)
-            {
-                <form method="post" id="calendarForm">
-                    @Html.AntiForgeryToken()
-                    <button type="submit" form="calendarForm" class="btn btn-primary ms-3">
-                        <i class="bi bi-save"></i> Зберегти
-                    </button>
-                </form>
-            }
         </div>
     }
 </div>
@@ -57,7 +47,19 @@
 </div>
 
 <form method="post" id="calendarForm">
+    @Html.AntiForgeryToken()
     <input type="hidden" name="SelectedGroupId" value="@Model.SelectedGroupId" />
+
+    @if (isEditMode && isAdmin)
+    {
+        <button type="submit" class="btn btn-primary mb-3">
+            <i class="bi bi-save"></i> Зберегти
+        </button>
+    }
+
+    @{
+        int i = 0; // ← ВНЕ monthGroup
+    }
 
     @foreach (var monthGroup in Model.DisplayEvents.GroupBy(e => new { e.Month, e.Year }).OrderBy(g => g.Key.Year).ThenBy(g => g.Key.Month))
     {
@@ -66,9 +68,6 @@
         <div class="card p-3 mb-4">
             <h5 class="mb-3">@monthName @monthGroup.Key.Year</h5>
             <div class="d-flex flex-wrap gap-3">
-                @{
-                    int i = 0;
-                }
                 @foreach (var week in monthGroup.OrderBy(w => w.WeekNumber))
                 {
                     var startDateStr = week.StartDate.ToString("dd.MM", ukCulture);
@@ -85,6 +84,8 @@
                             <input type="hidden" name="EditableEvents[@i].WeekNumber" value="@week.WeekNumber" />
                             <input type="hidden" name="EditableEvents[@i].StartDate" value="@week.StartDate.ToString("yyyy-MM-dd")" />
                             <input type="hidden" name="EditableEvents[@i].EndDate" value="@week.EndDate.ToString("yyyy-MM-dd")" />
+                            <input type="hidden" name="EditableEvents[@i].Month" value="@week.Month" />
+
                             <select class="form-select form-select-sm mt-2" name="EditableEvents[@i].Type">
                                 @foreach (var val in Enum.GetValues(typeof(AcademicWeekType)))
                                 {
@@ -94,10 +95,11 @@
                         }
                         else
                         {
-                            <span class="badge bg-@GetColor(week.Type) mt-2">@GetTypeDisplayName(week.Type.ToString())</span>
+                            <span class="badge bg-@GetColor(week.Type) text-white mt-2">@GetTypeDisplayName(week.Type.ToString())</span>
+
                         }
                     </div>
-                    i++;
+                    i++; // ← правильно увеличиваем глобальный счётчик
                 }
             </div>
         </div>
@@ -126,12 +128,23 @@
 
     string GetColor(AcademicWeekType type) => type switch
     {
-        AcademicWeekType.Lecture => "primary",
-        AcademicWeekType.ExamSession => "danger",
-        AcademicWeekType.Vacation => "success",
-        AcademicWeekType.Practice => "warning",
-        AcademicWeekType.StateExam => "secondary",
-        AcademicWeekType.Diploma => "info",
+        AcademicWeekType.Lecture => "primary",   // Синий
+        AcademicWeekType.ExamSession => "danger",    // Красный
+        AcademicWeekType.Vacation => "success",   // Зелёный
+        AcademicWeekType.Practice => "warning",   // Жёлтый
+        AcademicWeekType.StateExam => "dark",      // Тёмный
+
+        AcademicWeekType.WorkshopPractice => "secondary", // Серый
+        AcademicWeekType.GeoPractice => "info",      // Голубой
+        AcademicWeekType.FieldPractice => "secondary", // Серый
+        AcademicWeekType.ResearchWork => "info",      // Голубой
+        AcademicWeekType.DiplomaDefense => "dark",      // Тёмный
+
+        AcademicWeekType.TechnologyPractice => "warning",   // Жёлтый
+        AcademicWeekType.PreDiplomaPractice => "secondary", // Серый
+        AcademicWeekType.Diploma => "primary",   // Синий
+        AcademicWeekType.StateCertification => "dark",      // Тёмный
+
         _ => "light"
     };
 }

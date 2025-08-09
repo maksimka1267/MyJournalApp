@@ -12,5 +12,10 @@ public class GroupRepository : Repository<Group>, IGroupRepository
             .Where(g => g.TeacherId == teacherId)
             .ToListAsync();
     }
+    public async Task<bool> ExistsAsync(Guid groupId)
+    {
+        return await _context.Groups.AnyAsync(g => g.Id == groupId);
+    }
+
 
 }

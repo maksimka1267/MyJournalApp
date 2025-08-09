@@ -76,13 +76,31 @@ public class AcademicProcessController : ControllerBase
     }
     [Authorize(Roles = "Admin")]
     [HttpPut("bulk")]
-    public async Task<IActionResult> BulkUpdate([FromForm] List<AcademicEventDto> events)
+    public async Task<IActionResult> BulkUpdate([FromBody] List<AcademicEventDto> events)
     {
         foreach (var dto in events)
         {
             var existing = await _eventRepository.GetByIdAsync(dto.Id);
-            if (existing == null) continue;
+            if (existing == null)
+            {
+                // 👇 Вставляем новую запись
+                var newEvent = new AcademicEvent
+                {
+                    Id = dto.Id,
+                    GroupId = dto.GroupId,
+                    Type = dto.Type,
+                    Year = dto.Year,
+                    Month = dto.Month,
+                    WeekNumber = dto.WeekNumber,
+                    StartDate = dto.StartDate,
+                    EndDate = dto.EndDate
+                };
 
+                await _eventRepository.AddAsync(newEvent);
+                continue;
+            }
+
+            // 👇 Обновление
             existing.Type = dto.Type;
             existing.Year = dto.Year;
             existing.Month = dto.Month;
@@ -96,7 +114,6 @@ public class AcademicProcessController : ControllerBase
         await _eventRepository.SaveChangesAsync();
         return Ok();
     }
-
     public class AcademicEventDto
     {
         public Guid Id { get; set; }

@@ -20,7 +20,7 @@ builder.Services.AddRazorPages(); // ✅ Razor Pages support
 // HTTP Client for API calls in Razor Pages
 builder.Services.AddHttpClient("ApiClient", client =>
 {
-    client.BaseAddress = new Uri("https://localhost:7120/");
+    client.BaseAddress = new Uri("https://admin.monsterasp.net/app/site/site/deploy/ftp/webftp?site=site3350/");
 });
 // ✅ Required for Login Razor Page
 builder.Services.AddHttpContextAccessor();
@@ -119,4 +119,3 @@ app.MapRazorPages();
 app.MapControllers();
 
 app.Run();
-

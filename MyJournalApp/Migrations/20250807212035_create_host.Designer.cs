@@ -12,8 +12,8 @@ using MyJournalApp.Data;
 namespace MyJournalApp.Migrations
 {
     [DbContext(typeof(JournalDbContext))]
-    [Migration("20250801140435_test")]
-    partial class test
+    [Migration("20250807212035_create_host")]
+    partial class create_host
     {
         /// <inheritdoc />
         protected override void BuildTargetModel(ModelBuilder modelBuilder)

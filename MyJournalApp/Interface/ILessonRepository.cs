@@ -2,4 +2,6 @@
 {
     Task<IEnumerable<Lesson>> GetLessonsByGroupIdAsync(Guid groupId);
     Task<IEnumerable<Lesson>> GetLessonsByDateAsync(Guid groupId, DateTime date);
+    Task DeleteLessonsAsync(IEnumerable<Lesson> lessons);
+    Task AddRangeAsync(IEnumerable<Lesson> lessons);
 }

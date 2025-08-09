@@ -15,6 +15,7 @@ public class IndexModel : PageModel
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly IHttpContextAccessor _contextAccessor;
 
+    // ... (остальные свойства остаются без изменений)
     public IndexModel(IHttpClientFactory httpClientFactory, IHttpContextAccessor contextAccessor)
     {
         _httpClientFactory = httpClientFactory;
@@ -27,7 +28,6 @@ public class IndexModel : PageModel
     public List<Lesson> DayLessons { get; set; } = new();
     public List<User> Teachers { get; set; } = new();
     public Teacher? CurrentTeacher { get; set; }
-
     public List<DateOnly> WeekDays { get; set; } = new();
 
     [BindProperty(SupportsGet = true)]
@@ -41,6 +41,7 @@ public class IndexModel : PageModel
 
     public async Task<IActionResult> OnGetAsync()
     {
+        // ... (код OnGetAsync остается без изменений)
         var token = Request.Cookies["cookies"];
         if (string.IsNullOrEmpty(token)) return RedirectToPage("/Account/Login");
 
@@ -134,9 +135,14 @@ public class IndexModel : PageModel
         if (role == "Admin" && Request.Form.Files.Count > 0 && Request.Form.Files["File"] is IFormFile file)
         {
             var groupIdRaw = Request.Form["GroupId"];
-            if (Guid.TryParse(groupIdRaw, out var groupId))
+            // 👇 ПОЛУЧАЕМ ЗНАЧЕНИЕ IsNumerator ИЗ ФОРМЫ
+            var isNumeratorRaw = Request.Form["IsNumerator"];
+
+            // Пытаемся распарсить оба значения
+            if (Guid.TryParse(groupIdRaw, out var groupId) && bool.TryParse(isNumeratorRaw, out var isNumerator))
             {
-                await ImportLessonsAsync(client, file, groupId);
+                // Передаем isNumerator в метод
+                await ImportLessonsAsync(client, file, groupId, isNumerator);
                 return RedirectToPage(new { SelectedGroupId = groupId });
             }
         }
@@ -153,15 +159,19 @@ public class IndexModel : PageModel
         return RedirectToPage(new { SelectedGroupId = InputLesson.GroupId, SelectedDate = DateOnly.FromDateTime(InputLesson.StartTime) });
     }
 
-    private async Task ImportLessonsAsync(HttpClient client, IFormFile file, Guid groupId)
+    // 👇 ОБНОВЛЕННАЯ СИГНАТУРА И ТЕЛО МЕТОДА 👇
+    private async Task ImportLessonsAsync(HttpClient client, IFormFile file, Guid groupId, bool isNumerator)
     {
         using var content = new MultipartFormDataContent();
         content.Add(new StreamContent(file.OpenReadStream()), "File", file.FileName);
         content.Add(new StringContent(groupId.ToString()), "GroupId");
+        // Добавляем новое поле в запрос
+        content.Add(new StringContent(isNumerator.ToString()), "IsNumerator");
 
         await client.PostAsync("api/lesson/import", content);
     }
 
+    // ... (остальные методы CreateLessonAsync, UpdateTopicAsync и т.д. остаются без изменений)
     private async Task CreateLessonAsync(HttpClient client)
     {
         var lesson = new

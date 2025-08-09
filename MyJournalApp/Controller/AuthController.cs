@@ -1,4 +1,5 @@
 ﻿using ClosedXML.Excel;
+using DocumentFormat.OpenXml.Office2010.Excel;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using MyJournalApp.Auth;
@@ -42,12 +43,19 @@ public class AuthController : ControllerBase
     [HttpPost("register")]
     public async Task<IActionResult> Register([FromForm] RegisterDto dto)
     {
-        var existingUser = await _userRepository.GetByEmail(dto.Email);
-        if (existingUser != null)
+        // 1) Валидация
+        if (await _userRepository.GetByEmail(dto.Email) != null)
             return BadRequest("Email already in use");
 
-        var userId = Guid.NewGuid();
+        if (dto.Role == "Student")
+        {
+            if (dto.GroupId is null) return BadRequest("GroupId is required for student role");
+            var groupExists = await _groupRepository.ExistsAsync(dto.GroupId.Value);
+            if (!groupExists) return BadRequest("Group not found");
+        }
 
+        // 2) Создаем User
+        var userId = Guid.NewGuid();
         var user = new User
         {
             Id = userId,
@@ -58,22 +66,32 @@ public class AuthController : ControllerBase
         };
         await _userRepository.AddAsync(user);
 
+        // 3) Создаем профиль по роли
         switch (dto.Role)
         {
             case "Student":
-                await _studentRepository.AddAsync(new Student { Id = userId });
+                await _studentRepository.AddAsync(new Student
+                {
+                    Id = userId,
+                    GroupId = dto.GroupId!.Value
+                });
                 break;
+
             case "Teacher":
                 await _teacherRepository.AddAsync(new Teacher { Id = userId });
                 break;
+
             case "Admin":
                 await _adminRepository.AddAsync(new Admin { Id = userId });
                 break;
+
             default:
                 return BadRequest("Invalid role.");
         }
 
-        await _userRepository.SaveChangesAsync();
+        // 4) Один общий SaveChanges
+        await _userRepository.SaveChangesAsync(); // должен сохранить всё, если контекст общий
+
         return Ok("Registered successfully");
     }
 
@@ -210,7 +228,9 @@ public class AuthController : ControllerBase
         public string FullName { get; set; }
         public string Email { get; set; }
         public string Password { get; set; }
-        public string Role { get; set; } // Student, Teacher, Admin
+        public string Role { get; set; }
+        // Add this new property for students
+        public Guid? GroupId { get; set; }
     }
 
     public class LoginDto
