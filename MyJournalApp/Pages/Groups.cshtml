@@ -6,6 +6,14 @@
 }
 
 <h1>Список груп</h1>
+@if (User.IsInRole("Teacher"))
+{
+    <div class="mb-3">
+        <button type="button" class="btn btn-outline-dark" data-bs-toggle="modal" data-bs-target="#reportModal">
+            📊 Рапортичка
+        </button>
+    </div>
+}
 
 @if (User.IsInRole("Admin"))
 {
@@ -27,6 +35,7 @@
             <div class="modal-content rounded-4">
                 <form method="post">
                     @Html.AntiForgeryToken()
+                    <input type="hidden" name="handler" value="CreateGroup" />
                     <div class="modal-header">
                         <h5 class="modal-title" id="createGroupLabel">Створити нову групу</h5>
                         <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Закрити"></button>
@@ -62,6 +71,7 @@
             <div class="modal-content rounded-4">
                 <form method="post" enctype="multipart/form-data">
                     @Html.AntiForgeryToken()
+                    <input type="hidden" name="handler" value="ImportExcel" />
                     <div class="modal-header">
                         <h5 class="modal-title" id="importExcelLabel">Імпорт груп з Excel</h5>
                         <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Закрити"></button>
@@ -80,10 +90,55 @@
         </div>
     </div>
 }
+<div class="modal fade" id="reportModal" tabindex="-1" aria-labelledby="reportModalLabel" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content rounded-4">
+            <form method="post">
+                @Html.AntiForgeryToken()
+                <input type="hidden" name="handler" value="GenerateReport" />
+
+                <div class="modal-header">
+                    <h5 class="modal-title" id="reportModalLabel">Генерувати рапортичку</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Закрити"></button>
+                </div>
+
+                <div class="modal-body">
+                    <!-- Выбор группы -->
+                    <div class="mb-3">
+                        <label class="form-label">Група</label>
+                        <select name="Report.GroupId" class="form-select" required>
+                            <option value="">Оберіть групу</option>
+                            @foreach (var g in Model.GroupsWithDetails.OrderBy(g => g.Group.Name))
+                            {
+                                <option value="@g.Group.Id">@g.Group.Name</option>
+                            }
+                        </select>
+                    </div>
+
+                    <!-- Дата начала -->
+                    <div class="mb-3">
+                        <label class="form-label">Дата початку</label>
+                        <input type="date" name="Report.StartDate" class="form-control" required />
+                    </div>
+
+                    <!-- Дата окончания -->
+                    <div class="mb-3">
+                        <label class="form-label">Дата закінчення</label>
+                        <input type="date" name="Report.EndDate" class="form-control" required />
+                    </div>
+                </div>
+
+                <div class="modal-footer">
+                    <button type="submit" class="btn btn-dark w-100">Генерувати файл з оцінками</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
 
 @if (Model.GroupsWithDetails.Any())
 {
-    foreach (var group in Model.GroupsWithDetails)
+    foreach (var group in Model.GroupsWithDetails.OrderBy(g => g.Group.Name))
     {
         <div class="group-block mb-4 p-3 border rounded">
             <h3>@group.Group.Name</h3>
@@ -104,7 +159,7 @@
                         </tr>
                     </thead>
                     <tbody>
-                        @foreach (var student in group.Students)
+                        @foreach (var student in group.Students.OrderBy(g => g.FullName))
                         {
                             <tr>
                                 <td>@student.FullName</td>
@@ -116,6 +171,7 @@
                                         <!-- Форма перемещения студента -->
                                         <form method="post" class="d-flex align-items-center gap-2">
                                             @Html.AntiForgeryToken()
+                                            <input type="hidden" name="handler" value="MoveStudent" />
                                             <!-- Айди студента -->
                                             <input type="hidden" name="MoveStudent.StudentId" value="@student.Id" />
                                             <!-- Из какой группы -->
@@ -123,7 +179,7 @@
 
                                             <!-- В какую группу -->
                                             <select name="MoveStudent.ToGroupId" class="form-select form-select-sm w-auto">
-                                                @foreach (var g in Model.GroupsWithDetails)
+                                                @foreach (var g in Model.GroupsWithDetails.OrderBy(g => g.Group.Name))
                                                 {
                                                     <option value="@g.Group.Id" selected="@(g.Group.Id == group.Group.Id)">
                                                         @g.Group.Name

@@ -1,16 +1,24 @@
 ﻿using ClosedXML.Excel;
 using Microsoft.AspNetCore.Mvc;
+using MyJournalApp.Interface;
 [ApiController]
 [Route("api/[controller]")]
 public class LessonController : ControllerBase
 {
     private readonly ILessonRepository _lessonRepository;
     private readonly ITeacherRepository _teacherRepository;
+    private readonly IUserRepository _userRepository;
+    private readonly IGroupRepository _groupRepository;
 
-    public LessonController(ILessonRepository lessonRepository, ITeacherRepository teacherRepository)
+    public LessonController(ILessonRepository lessonRepository,
+                            ITeacherRepository teacherRepository,
+                            IUserRepository userRepository,
+                            IGroupRepository groupRepository)
     {
         _lessonRepository = lessonRepository;
         _teacherRepository = teacherRepository;
+        _userRepository = userRepository;
+        _groupRepository = groupRepository;
     }
 
     [HttpGet]
@@ -69,7 +77,7 @@ public class LessonController : ControllerBase
         existing.Topic = updated.Topic;
         existing.Homework = updated.Homework;
         existing.StartTime = updated.StartTime;
-
+        existing.Clocks = updated.Clocks;
         await _lessonRepository.Update(existing);
         return NoContent();
     }
@@ -257,15 +265,15 @@ public class LessonController : ControllerBase
     {
         start = pairNumRaw switch
         {
-            "І" => new TimeOnly(9, 0),
-            "ІІ" => new TimeOnly(10, 10),
-            "ІІІ" => new TimeOnly(11, 20),
-            "IV" => new TimeOnly(12, 30),
-            "V" => new TimeOnly(13, 40),
+            "1" => new TimeOnly(9, 0),
+            "2" => new TimeOnly(10, 10),
+            "3" => new TimeOnly(11, 20),
+            "4" => new TimeOnly(12, 30),
+            "5" => new TimeOnly(13, 40),
             _ => default
         };
 
-        return pairNumRaw is "І" or "ІІ" or "ІІІ" or "IV" or "V";
+        return pairNumRaw is "1" or "2" or "3" or "4" or "5";
     }
     public class ImportLessonsDto
     {
@@ -282,5 +290,109 @@ public class LessonController : ControllerBase
 
         await _lessonRepository.Delete(existing);
         return NoContent();
+    }
+    [HttpGet("export")]
+    public async Task<IActionResult> ExportToExcel([FromQuery] ExportDto dto)
+    {
+        // 1. Проверяем, были ли переданы обязательные для поиска параметры
+        if (!dto.TeacherId.HasValue || !dto.StartDate.HasValue || !dto.EndDate.HasValue)
+        {
+            return BadRequest("Необходимо указать преподавателя и полный период (начальная и конечная даты) для формирования отчета.");
+        }
+
+        // 2. Вызываем ваш существующий метод репозитория
+        var filteredLessons = await _lessonRepository.GetByTeacherAsync(
+            dto.TeacherId.Value,
+            dto.StartDate.Value,
+            dto.EndDate.Value,
+            dto.GroupId,         // Передаем как есть (может быть null)
+            dto.SubjectName      // Передаем как есть (может быть null)
+        );
+
+        // GetByTeacherAsync возвращает List<Lesson>, поэтому можно проверить через .Count
+        if (filteredLessons.Count == 0)
+        {
+            return NotFound("Нет уроков, соответствующих вашим критериям.");
+        }
+
+        // 3. Создаем Excel-файл (этот блок кода остается без изменений)
+        using (var workbook = new XLWorkbook())
+        {
+            var worksheet = workbook.Worksheets.Add("Звіт по годинах");
+
+            // --- Заголовки документа ---
+            var firstLesson = filteredLessons.First();
+            string groupNameForHeader = "Всі групи";
+            Guid? effectiveGroupId = dto.GroupId;
+
+            // если группу не передали, но все уроки одной группы — покажем её имя
+            if (!effectiveGroupId.HasValue)
+            {
+                var distinctGroups = filteredLessons.Select(l => l.GroupId).Distinct().ToList();
+                if (distinctGroups.Count == 1) effectiveGroupId = distinctGroups[0];
+            }
+            if (effectiveGroupId.HasValue)
+            {
+                var group = await _groupRepository.GetByIdAsync(effectiveGroupId.Value);
+                groupNameForHeader = group?.Name ?? "Невідома група";
+            }
+
+            // Вам понадобятся репозитории для получения имен по ID
+            var teacher = await _teacherRepository.GetByIdAsync(firstLesson.TeacherId);
+            // var group = await _groupRepository.GetByIdAsync(firstLesson.GroupId);
+            var user = await _userRepository.GetByIdAsync(firstLesson.TeacherId);
+            worksheet.Cell("D2").Value = "Група:";
+            worksheet.Cell("E2").Value = groupNameForHeader;
+            worksheet.Cell("D4").Value = "Дисципліна:";
+            worksheet.Cell("E4").Value = !string.IsNullOrEmpty(dto.SubjectName) ? dto.SubjectName : "Всі дисципліни";
+            worksheet.Cell("D6").Value = "П.І.Б. викладача:";
+            worksheet.Cell("E6").Value = user?.FullName ?? "Невідомий";
+
+            // --- Заголовки таблицы ---
+            var headerRow = 9;
+            worksheet.Cell(headerRow, 1).Value = "Дата занять";
+            worksheet.Cell(headerRow, 2).Value = "№ з/п";
+            worksheet.Cell(headerRow, 3).Value = "Кількість годин";
+            worksheet.Cell(headerRow, 4).Value = "Тема заняття";
+            worksheet.Range(headerRow, 1, headerRow, 4).Style.Font.SetBold();
+            worksheet.Range(headerRow, 1, headerRow, 4).Style.Fill.SetBackgroundColor(XLColor.LightGray);
+
+            // --- Заполнение данными ---
+            int currentRow = headerRow + 1;
+            int lessonNumber = 1;
+            foreach (var lesson in filteredLessons)
+            {
+                worksheet.Cell(currentRow, 1).Value = lesson.StartTime.ToString("yyyy-MM-dd");
+                worksheet.Cell(currentRow, 2).Value = lessonNumber++;
+                worksheet.Cell(currentRow, 3).Value = lesson.Clocks.HasValue ? lesson.Clocks.Value.ToString() : "N/A";
+                worksheet.Cell(currentRow, 4).Value = lesson.Topic;
+                currentRow++;
+            }
+
+            // --- Настройка ширины колонок ---
+            worksheet.Column(1).AdjustToContents();
+            worksheet.Column(2).AdjustToContents();
+            worksheet.Column(3).AdjustToContents();
+            worksheet.Column(4).Width = 50;
+
+            // 4. Сохраняем в поток и возвращаем как файл
+            using (var stream = new MemoryStream())
+            {
+                workbook.SaveAs(stream);
+                var content = stream.ToArray();
+                var contentType = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+                var fileName = $"Export_{user?.FullName}_{DateTime.Now:yyyyMMdd}.xlsx";
+
+                return File(content, contentType, fileName);
+            }
+        }
+    }
+    public class ExportDto
+    {
+        public Guid? GroupId { get; set; }
+        public Guid? TeacherId { get; set; }
+        public string? SubjectName { get; set; }
+        public DateTime? StartDate { get; set; }
+        public DateTime? EndDate { get; set; }
     }
 }

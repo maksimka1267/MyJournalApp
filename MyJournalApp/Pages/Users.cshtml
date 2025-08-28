@@ -56,7 +56,7 @@
                     </tr>
                 </thead>
                 <tbody>
-                    @foreach (var user in Model.FilteredUsers)
+                    @foreach (var user in Model.FilteredUsers.OrderBy(g => g.FullName))
                     {
                         var groupName = Model.GetGroupName(user.Id, user.Role);
                         <tr>
@@ -142,7 +142,7 @@ else
                     <div class="mb-3 d-none" id="groupSelectContainer">
                         <label class="form-label">Група</label>
                         <select class="form-select" name="NewUser.GroupId">
-                            @foreach (var group in Model.Groups)
+                            @foreach (var group in Model.Groups.OrderBy(g => g.Name))
                             {
                                 <option value="@group.Id">@group.Name</option>
                             }
@@ -184,7 +184,7 @@ else
                     <div class="mb-3 d-none" id="excelGroupSelectContainer">
                         <label class="form-label">Група</label>
                         <select class="form-select" name="ExcelUpload.GroupId">
-                            @foreach (var group in Model.Groups)
+                            @foreach (var group in Model.Groups.OrderBy(d=>d.Name))
                             {
                                 <option value="@group.Id">@group.Name</option>
                             }

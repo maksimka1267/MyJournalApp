@@ -6,6 +6,7 @@
     Layout = "_Layout";
 
     var isAdmin = Model.Role == "Admin";
+    var isTeacher = Model.Role == "Teacher";
     var isEditMode = Request.Query["edit"] == "true";
 
     var ukCulture = new CultureInfo("uk-UA");
@@ -19,7 +20,7 @@
         <div class="d-flex align-items-center justify-content-between mb-3">
             <form method="get" class="d-flex align-items-center">
                 <select name="groupId" class="form-select me-2" onchange="this.form.submit()">
-                    @foreach (var group in Model.AllGroups)
+                    @foreach (var group in Model.AllGroups.OrderBy(g => g.Name))
                     {
                         <option value="@group.Id" selected="@(group.Id == Model.SelectedGroupId)">@group.Name</option>
                     }
@@ -31,6 +32,19 @@
                         <i class="bi bi-pencil-square"></i> Редагувати
                     </a>
                 }
+            </form>
+        </div>
+    }
+    @if (isTeacher)
+    {
+        <div class="d-flex align-items-center justify-content-between mb-3">
+            <form method="get" class="d-flex align-items-center">
+                <select name="groupId" class="form-select me-2" onchange="this.form.submit()">
+                    @foreach (var group in Model.AllGroups.OrderBy(g => g.Name))
+                    {
+                        <option value="@group.Id" selected="@(group.Id == Model.SelectedGroupId)">@group.Name</option>
+                    }
+                </select>
             </form>
         </div>
     }

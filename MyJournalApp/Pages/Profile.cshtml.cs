@@ -16,67 +16,71 @@ public class ProfileModel : PageModel
         _httpClientFactory = httpClientFactory;
     }
 
-    [BindProperty] public string Email { get; set; }
-    [BindProperty] public string Role { get; set; }
-    [BindProperty] public string NewPassword { get; set; }
-    public string StatusMessage { get; set; }
-    public string ErrorMessage { get; set; }
+    [BindProperty] public string Email { get; set; } = string.Empty;
+    [BindProperty] public string Role { get; set; } = string.Empty;
+    [BindProperty] public string NewPassword { get; set; } = string.Empty;
+    public string? StatusMessage { get; set; }
+    public string? ErrorMessage { get; set; }
 
     public async Task<IActionResult> OnGetAsync()
     {
-        var client = _httpClientFactory.CreateClient("ApiClient");
-        var request = new HttpRequestMessage(HttpMethod.Get, "api/Auth/me"); // ✅ без /
+        // берём jwt из куки
+        if (!Request.Cookies.TryGetValue("cookies", out var jwt) || string.IsNullOrWhiteSpace(jwt))
+            return RedirectToPage("/Account/Login");
 
-        // Передай cookie JWT токен
-        if (Request.Cookies.TryGetValue("cookies", out var jwt))
-            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", jwt);
+        var client = _httpClientFactory.CreateClient(); // без BaseAddress
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", jwt);
 
-        var response = await client.SendAsync(request);
-        if (!response.IsSuccessStatusCode)
+        var meResp = await client.GetAsync(ApiUrl("/api/Auth/me"));
+        if (!meResp.IsSuccessStatusCode)
         {
-            ErrorMessage = "Не вдалося отримати дані.";
+            ErrorMessage = "Не вдалося отримати дані профілю.";
             return Page();
         }
 
-        var json = await response.Content.ReadAsStringAsync();
+        var json = await meResp.Content.ReadAsStringAsync();
         using var doc = JsonDocument.Parse(json);
         var root = doc.RootElement;
 
-        Email = root.GetProperty("email").GetString();
-        Role = root.GetProperty("role").GetString();
+        Email = root.GetProperty("email").GetString() ?? string.Empty;
+        Role = root.GetProperty("role").GetString() ?? string.Empty;
 
         return Page();
     }
 
     public async Task<IActionResult> OnPostAsync()
     {
+        if (!Request.Cookies.TryGetValue("cookies", out var jwt) || string.IsNullOrWhiteSpace(jwt))
+            return RedirectToPage("/Account/Login");
+
         if (string.IsNullOrWhiteSpace(NewPassword))
         {
             ErrorMessage = "Пароль не може бути порожнім.";
             return await OnGetAsync();
         }
 
+        var client = _httpClientFactory.CreateClient(); // без BaseAddress
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", jwt);
+
         var dto = new { NewPassword };
-        var json = JsonSerializer.Serialize(dto);
-        var content = new StringContent(json, Encoding.UTF8, "application/json");
+        using var content = new StringContent(JsonSerializer.Serialize(dto), Encoding.UTF8, "application/json");
 
-        var client = _httpClientFactory.CreateClient("ApiClient");
-        var request = new HttpRequestMessage(HttpMethod.Put, "/api/Auth/change-password")
-        {
-            Content = content
-        };
-
-        if (Request.Cookies.TryGetValue("cookies", out var jwt))
-            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", jwt);
-
-        var response = await client.SendAsync(request);
-        if (!response.IsSuccessStatusCode)
+        var resp = await client.PutAsync(ApiUrl("/api/Auth/change-password"), content);
+        if (!resp.IsSuccessStatusCode)
         {
             ErrorMessage = "Не вдалося змінити пароль.";
             return await OnGetAsync();
         }
 
         StatusMessage = "✅ Пароль оновлено!";
+        NewPassword = string.Empty;
         return await OnGetAsync();
+    }
+
+    // строим абсолютный URL к API на этом же домене
+    private string ApiUrl(string relativePath)
+    {
+        var path = relativePath.StartsWith("/") ? relativePath : "/" + relativePath;
+        return $"{Request.Scheme}://{Request.Host}{path}";
     }
 }

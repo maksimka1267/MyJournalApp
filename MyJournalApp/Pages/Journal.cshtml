@@ -5,13 +5,37 @@
     Layout = "_Layout";
 
     var selectedJournal = Model.Journals.FirstOrDefault(j => j.Id == Model.SelectedJournalId);
-    var groupName = selectedJournal != null && Model.GroupNames.TryGetValue(selectedJournal.GroupId, out var gn) ? gn : "";
+    var groupName = "";
+    if (selectedJournal != null && Model.GroupNames.TryGetValue(selectedJournal.GroupId, out var gn))
+    {
+        groupName = gn;
+    }
     var subjectName = selectedJournal?.Subject ?? "";
-    var topicHeaders = Model.TopicHeaders;
-    var grades = Model.SelectedJournalGrades;
+    // Для быстрого доступа к именам пользователей
+    var userById = Model.Users?.ToDictionary(u => u.Id, u => u.FullName ?? "—")
+                   ?? new Dictionary<Guid, string>();
 }
+<style>
+    /* убрать встроенную стрелку у Bootstrap form-select */
+    .presence-select.form-select {
+        background-image: none !important;
+    }
 
+    /* убрать нативную стрелку браузера */
+    .presence-select {
+        appearance: none;
+        -webkit-appearance: none;
+        -moz-appearance: none;
+        padding-right: .5rem; /* раз стрелки нет — меньше отступ справа */
+    }
+
+        .presence-select::-ms-expand {
+            display: none;
+        }
+    /* старые IE/Edge */
+</style>
 <h2>Журнал</h2>
+
 @if (!ViewData.ModelState.IsValid)
 {
     <div class="alert alert-danger">
@@ -27,47 +51,54 @@
     <button class="btn btn-primary mb-3" data-bs-toggle="modal" data-bs-target="#addJournalModal">
         ➕ Додати журнал
     </button>
-    <form method="post" asp-page-handler="DeleteAllJournals" onsubmit="return confirm('Усі журнали та оцінки будуть видалені. Продовжити?');">
+    <form method="post" onsubmit="return confirm('Усі журнали та оцінки будуть видалені. Продовжити?');">
         @Html.AntiForgeryToken()
-        <p>Handler: @RouteData.Values["handler"]</p>
-
+        <input type="hidden" name="handler" value="DeleteAllJournals" />
         <button class="btn btn-danger">🗑 Видалити всі журнали</button>
     </form>
-
 
 }
 
 @if (Model.Role == "Teacher" || Model.Role == "Admin")
 {
     <div class="d-flex align-items-start gap-2 mb-4">
-
-        <!-- Выбор журнала (GET) -->
         <form method="get">
             <div class="input-group">
                 <select name="selectedJournalId" class="form-select" onchange="this.form.submit()">
-                    @foreach (var journal in Model.Journals)
+                    @foreach (var j in Model.Journals
+                                    .OrderBy(j => j.Name ?? j.Subject ?? "")
+                                    .ThenBy(j => Model.GroupNames.GetValueOrDefault(j.GroupId, ""))
+                                    .ThenBy(j => j.Date))
                     {
-                        var group = Model.GroupNames.GetValueOrDefault(journal.GroupId, "Група");
-                        var subject = journal.Subject ?? "Предмет";
-                        <option value="@journal.Id" selected="@(journal.Id == Model.SelectedJournalId)">
-                            @($"{subject} — {group} ({journal.Date:yyyy-MM-dd})")
+                        var group = Model.GroupNames.GetValueOrDefault(j.GroupId, "Група");
+                        var subject = j.Subject ?? "Предмет";
+                        var text = !string.IsNullOrWhiteSpace(j.Name)
+                        ? j.Name
+                        : $"{subject} — {group} ({j.Date:yyyy-MM-dd})";
+
+                        <option value="@j.Id" @(j.Id == Model.SelectedJournalId ? "selected" : "")>
+                            @text
                         </option>
                     }
                 </select>
             </div>
         </form>
-
-        <!-- Удаление журнала (POST) -->
+        @if ((Model.Role == "Teacher") && selectedJournal != null && !Model.IsCuratorOnlyForSelectedJournal)
+        {
+            <button class="btn btn-info" data-bs-toggle="modal" data-bs-target="#addSpecialGradesModal">
+                ➕ Додати колонку
+            </button>
+        }
         @if (Model.Role == "Admin")
         {
-            <form method="post" asp-page-handler="DeleteJournal" asp-route-id="@Model.SelectedJournalId"
-                  onsubmit="return confirm('Видалити цей журнал?');">
+            <form method="post" onsubmit="return confirm('Видалити цей журнал?');">
                 @Html.AntiForgeryToken()
+                <input type="hidden" name="handler" value="DeleteJournal" />
+                <input type="hidden" name="id" value="@Model.SelectedJournalId" />
                 <button type="submit" class="btn btn-outline-danger">🗑 Видалити журнал</button>
             </form>
 
         }
-
     </div>
 }
 
@@ -76,12 +107,25 @@
     <div class="card mt-3">
         <div class="card-body">
             <h4>@subjectName — Група @groupName</h4>
+            @if (Model.Role == "Admin")
+            {
+                var teacherNamesForJournal = Model.Grades
+                .Where(g => g.JournalEntryId == Model.SelectedJournalId)
+                .Select(g => userById.GetValueOrDefault(g.TeacherId, "—"))
+                .Distinct()
+                .ToList();
 
+                var headerTeacherText = teacherNamesForJournal.Count > 0
+                ? string.Join(", ", teacherNamesForJournal)
+                : "—";
+                <div class="text-muted mb-2">
+                    Викладач: <strong>@headerTeacherText</strong>
+                </div>
+            }
+            @* Роль: Student / Teacher / Admin — одна ветка *@
             @if (Model.Role == "Student")
             {
                 var studentId = Model.UserId;
-
-                // Усі дати, коли студент отримував оцінки
                 var allDates = Model.Grades
                 .Where(g => g.StudentId == studentId)
                 .Select(g => g.Created.Date)
@@ -109,14 +153,12 @@
 
                             <tr>
                                 <td>@subject</td>
-
                                 @foreach (var date in allDates)
                                 {
                                     var grade = studentGrades.FirstOrDefault(g => g.Created.Date == date);
                                     if (grade != null)
                                     {
-                                        <td title="Тип: @grade.Comment, Вчитель: @(Model.Users.FirstOrDefault(u => u.Id == grade.TeacherId)?.FullName ?? "—")"
-                                            style="cursor: help;">
+                                        <td title="Тип: @grade.Comment, Вчитель: @(userById.GetValueOrDefault(grade.TeacherId, "—"))" style="cursor: help;">
                                             @grade.Value
                                         </td>
                                     }
@@ -130,97 +172,127 @@
                     </tbody>
                 </table>
             }
-
-            else
+            else if (Model.Role == "Teacher" || Model.Role == "Admin")
             {
-                <form method="post" asp-page-handler="AddTopic">
+                <div class="small text-muted mb-2">
+                    <span class="me-3"><strong>0</strong> — неатестований</span>
+                    <span class="me-3"><strong>П</strong> — присутній</span>
+                    <span class="me-3"><strong>Н</strong> — відсутній</span>
+                </div>
+                <form method="post">
                     @Html.AntiForgeryToken()
-                    <table class="table table-bordered mt-3">
-                        <thead class="table-light">
-                            <tr>
-                                <th>Прізвище, Ім'я, По батькові</th>
-                                @foreach (var topic in topicHeaders)
-                                {
-                                    var gradeSample = Model.SelectedJournalGrades.FirstOrDefault(g => g.Comment == topic);
-                                    var dateLabel = gradeSample?.Created.ToString("dd.MM.yyyy") ?? "—";
+                    <input type="hidden" name="handler" value="UpdateGrades" />
+                    <input type="hidden" name="GradesForUpdate.JournalId" value="@Model.SelectedJournalId" />
+                    @if (Model.Role == "Teacher" && !Model.IsCuratorOnlyForSelectedJournal)
+                    {
+                        <div class="d-flex justify-content-end mb-2">
+                            <button type="submit" class="btn btn-success">💾 Зберегти всі зміни</button>
+                        </div>
+                    }
 
-                                    <th>
-                                        @dateLabel
-                                        @if (Model.Role == "Admin")
-                                        {
-                                            <div class="small">Вчитель</div>
-                                        }
-                                    </th>
-                                }
-
-                                @if (Model.Role == "Teacher")
-                                {
-                                    <th>
-                                        <select name="NewTopic.Comment" class="form-select form-select-sm" required>
-                                            <option value="">-- Оберіть тип --</option>
-                                            <option value="Лабораторна робота">Лабораторна робота</option>
-                                            <option value="Домашнє завдання">Домашнє завдання</option>
-                                            <option value="Самостійна робота">Самостійна робота</option>
-                                            <option value="Контрольна робота">Контрольна робота</option>
-                                            <option value="Тестування">Тестування</option>
-                                        </select>
-                                    </th>
-                                }
-                            </tr>
-                        </thead>
-                        <tbody>
-                            @foreach (var student in Model.Students)
-                            {
-                                var fullName = Model.Users.FirstOrDefault(u => u.Id == student.Id)?.FullName ?? "—";
-
+                    <div class="table-responsive">
+                        <table class="table table-bordered mt-3 journal-table">
+                            <thead class="table-light">
                                 <tr>
-                                    <td>@fullName</td>
+                                    <th style="min-width: 200px;">Прізвище, Ім'я</th>
 
-                                    @foreach (var topic in topicHeaders)
+                                    @foreach (var column in Model.JournalColumns)
                                     {
-                                        var grade = grades.FirstOrDefault(g =>
-                                        g.StudentId == student.Id &&
-                                        g.Comment == topic &&
-                                        g.JournalEntryId == selectedJournal.Id);
+                                        var dateKey = column.Date.ToString("yyyyMMdd");
+                                        var hasTopic = !string.IsNullOrWhiteSpace(column.Topic);
+                                        <th class="text-center align-top">
+                                            <div class="fw-semibold">@column.Topic</div>
+                                            <small class="text-muted d-block">@column.Date.ToString("dd.MM")</small>
+                                            @* Селект показываем только учителю и только если темы ещё нет *@
+                                            @if (Model.Role == "Teacher" && !Model.IsCuratorOnlyForSelectedJournal && !hasTopic)
+                                            {
+                                                <select name="GradesForUpdate.Topics[@dateKey]" class="form-select form-select-sm mt-1">
+                                                    <option value="Лекція">Лекція</option>
+                                                    <option value="Практична робота">Практична робота</option>
+                                                    <option value="Лабораторна робота">Лабораторна робота</option>
+                                                    <option value="Напам'ять">Напам'ять</option>
+                                                    <option value="Зошит/Конспект">Зошит/Конспект</option>
+                                                    <option value="Семінарське заняття">Семінарське заняття</option>
+                                                    <option value="Робота на уроці">Робота на уроці</option>
 
-                                        @if (Model.Role == "Admin")
+                                                </select>
+                                            }
+                                        </th>
+                                    }
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @foreach (var student in Model.Students.OrderBy(s => Model.StudentNames.GetValueOrDefault(s.Id, "—")))
+                                {
+                                    var fullName = Model.StudentNames.GetValueOrDefault(student.Id, "—");
+                                    <tr>
+                                        <td>@fullName</td>
+                                        @foreach (var column in Model.JournalColumns)
                                         {
-                                            var teacherName = grade != null
-                                            ? Model.Users.FirstOrDefault(u => u.Id == grade.TeacherId)?.FullName ?? "—"
-                                            : "—";
+                                            var grade = Model.Grades.FirstOrDefault(g =>
+                                            g.StudentId == student.Id &&
+                                            g.Created.Date == column.Date.Date);
 
-                                            var value = grade?.Value.ToString() ?? "-";
+                                            // Для куратора: readonly, если оценку ставил не он
+                                            var isOwner = selectedJournal?.TeacherId?.Contains(Model.UserId) == true;
+                                            bool isReadOnly = Model.Role == "Teacher" &&
+                                            !isOwner &&
+                                            grade != null &&
+                                            grade.TeacherId != Model.UserId;
 
-                                            <td>
-                                                <div><strong>@value</strong></div>
-                                                <div class="small text-muted">@teacherName</div>
+
+                                            <td class="text-center">
+                                                @{
+                                                    var dateKey = column.Date.ToString("yyyyMMdd");
+                                                    var isLecture = string.Equals(column.Topic, "Лекція", StringComparison.OrdinalIgnoreCase);
+
+                                                    var inputName = $"GradesForUpdate.Grades[{student.Id}-{dateKey}]";
+                                                    var presenceInputName = $"GradesForUpdate.Presence[{student.Id}-{dateKey}]";
+
+                                                    var initialVal = grade?.Value;
+                                                    var initialStr = initialVal.HasValue ? initialVal.Value.ToString() : "";
+
+                                                    string initialPresence = grade?.IsPresent.HasValue == true
+                                                    ? (grade.IsPresent.Value ? "true" : "false")
+                                                    : "";
+                                                }
+                                                <div class="d-flex flex-column gap-1" data-datekey="@dateKey">
+                                                    @* ПОЛЕ ОЦЕНКИ скрываем, если тема — «Лекція» *@
+                                                    @if (!isLecture)
+                                                    {
+                                                        <input type="number"
+                                                               class="form-control form-control-sm text-center grade-input"
+                                                               data-name="@inputName"
+                                                               data-initial="@initialStr"
+                                                               value="@initialStr"
+                                                               min="0" max="@selectedJournal.MaxValue"
+                                                               title="Вчитель: @(grade != null ? userById.GetValueOrDefault(grade.TeacherId, "Невідомо") : "—")"
+                                                               @((Model.IsCuratorOnlyForSelectedJournal || isReadOnly || Model.Role == "Admin") ? "readonly" : "") />
+                                                    }
+
+                                                    <select class="form-select form-select-sm presence-select text-center"
+                                                            data-name="@presenceInputName"
+                                                            data-initial="@initialPresence"
+                                                            @((Model.IsCuratorOnlyForSelectedJournal || isReadOnly || Model.Role == "Admin") ? "disabled" : "")>
+                                                            <option value="" @(initialPresence == "" ? "selected" : "")></option>
+                                                            <option value="true" @(initialPresence == "true" ? "selected" : "")>П</option>
+                                                            <option value="false" @(initialPresence == "false" ? "selected" : "")>Н</option>
+                                                    </select>
+                                                </div>
                                             </td>
-                                        }
-                                        else
-                                        {
-                                            <td>@(grade?.Value.ToString() ?? "-")</td>
-                                        }
-                                    }
 
-                                    @if (Model.Role == "Teacher")
-                                    {
-                                        <td>
-                                            <input type="number" name="NewTopic.Grades[@student.Id]" class="form-control" min="1" max="100" />
-                                        </td>
-                                    }
-                                </tr>
-                            }
-
-                            @if (Model.Role == "Teacher")
-                            {
-                                <tr>
-                                    <td colspan="@((topicHeaders.Count() + 2))" class="text-end">
-                                        <button type="submit" class="btn btn-primary">Зберегти</button>
-                                    </td>
-                                </tr>
-                            }
-                        </tbody>
-                    </table>
+                                        }
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                    @if (Model.Role == "Teacher" && !Model.IsCuratorOnlyForSelectedJournal)
+                    {
+                        <div class="mt-3 d-flex justify-content-end">
+                            <button type="submit" class="btn btn-success">💾 Зберегти всі зміни</button>
+                        </div>
+                    }
                 </form>
             }
         </div>
@@ -235,30 +307,68 @@ else
 <div class="modal fade" id="addJournalModal" tabindex="-1" aria-labelledby="addJournalModalLabel" aria-hidden="true">
     <div class="modal-dialog">
         <div class="modal-content">
-            <form method="post" asp-page-handler="CreateJournal">
+            <form method="post">
                 @Html.AntiForgeryToken()
+                <input type="hidden" name="handler" value="CreateJournal" />
                 <div class="modal-body">
+
+                    <!-- 1) Назва -->
+                    <div class="mb-3">
+                        <label class="form-label">Назва журналу</label>
+                        <input type="text"
+                               name="NewJournal.Name"
+                               class="form-control"
+                               placeholder="Напр.: Вища математика — КБ-21 — І семестр" />
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Максимальна оцінка</label>
+                        <input type="number"
+                               name="NewJournal.MaxValue"
+                               class="form-control"
+                               step="1"
+                               min="5"
+                               max="12"
+                               required />
+                    </div>
+
+                    <!-- 2) Предмет -->
                     <div class="mb-3">
                         <label class="form-label">Предмет</label>
                         <select name="NewJournal.Subject" class="form-select" required>
-                            <option value="">-- Оберіть предмет --</option>
-                            <option value="Зарубіжна література">Зарубіжна література</option>
-                            <option value="Фізика">Фізика</option>
-                            <option value="Хімія">Хімія</option>
-                            <option value="Англійська мова">Англійська мова</option>
-                            <option value="Інформатика">Інформатика</option>
+                            <option>Фізичне виховання</option>
+                            <option>Основи екології</option>
+                            <option>Основи правознавства</option>
+                            <option>Вища математика</option>
+                            <option>Опір матеріалів</option>
+                            <option>Безпека життєдіяльності</option>
+                            <option>ХІМІЯ</option>
+                            <option>Інженерне креслення</option>
+                            <option>Будівельне матеріалознавство</option>
+                            <option>Інженерна геодезія</option>
+                            <option>Електротехніка в будівництві</option>
+                            <option>Будівельні конструкції</option>
+                            <option>Фізичне виховання (заняття в секціях)***</option>
+                            <option>Основи економічної теорії</option>
+                            <option>Культурологія</option>
+                            <option>Теоретична механіка</option>
+                            <option>ФІЗИКА</option>
+                            <option>Історія України</option>
                         </select>
                     </div>
+
+                    <!-- 3) Група -->
                     <div class="mb-3">
                         <label class="form-label">Група</label>
                         <select name="NewJournal.GroupId" class="form-select" required>
                             <option value="">-- Оберіть групу --</option>
-                            @foreach (var kvp in Model.GroupNames)
+                            @foreach (var kvp in Model.GroupNames.OrderBy(g => g.Value))
                             {
                                 <option value="@kvp.Key">@kvp.Value</option>
                             }
                         </select>
                     </div>
+
+                    <!-- 4) Викладач -->
                     <div class="mb-3">
                         <label class="form-label">Викладач</label>
                         <select name="NewJournal.TeacherId" class="form-select" required>
@@ -278,3 +388,126 @@ else
         </div>
     </div>
 </div>
+
+<!-- Модальне вікно тематичної/підсумкової колонки (залишено без змін) -->
+<div class="modal fade" id="addSpecialGradesModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <form method="post">
+                @Html.AntiForgeryToken()
+                <input type="hidden" name="handler" value="AddSpecialGrades" />
+                <input type="hidden" name="GradesForUpdate.JournalId" value="@Model.SelectedJournalId" />
+                <div class="modal-header">
+                    <h5 class="modal-title">Додати тематичну/підсумкову колонку</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="row g-3">
+                        <div class="col-md-6">
+                            <label class="form-label">Тема</label>
+                            <select name="GradesForUpdate.Comment" class="form-select" required>
+                                <option value="">-- Оберіть тему --</option>
+                                <option value="Тематична">Тематична</option>
+                                <option value="Рубіжний контроль">Рубіжний контроль</option>
+                                <option value="Комплексна контрольна робота">Комплексна контрольна робота</option>
+                                <option value="Залік">Залік</option>
+                                <option value="Іспит">Іспит</option>
+                                <option value="Семестрова">Семестрова</option>
+                                <option value="Річна">Річна</option>
+                                <option value="Підсумкова">Підсумкова</option>
+                                <option value="Захист КП/КР">Захист КП/КР</option>
+                            </select>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label">Дата</label>
+                            <input type="date" name="GradesForUpdate.Date" class="form-control" value="@DateTime.Today.ToString("yyyy-MM-dd")" required />
+                        </div>
+                    </div>
+                    <hr />
+                    <h6>Оцінки студентів</h6>
+                    <div style="max-height: 300px; overflow-y: auto;">
+                        <table class="table table-sm">
+                            @foreach (var student in Model.Students.OrderBy(s => Model.StudentNames.GetValueOrDefault(s.Id)))
+                            {
+                                <tr>
+                                    <td>@Model.StudentNames.GetValueOrDefault(student.Id, "—")</td>
+                                    <td style="width: 120px;">
+                                        <input type="number" name="GradesForUpdate.Grades[@student.Id]" class="grade-modal-input" min="1" max="12" />
+                                    </td>
+                                </tr>
+                            }
+                        </table>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Скасувати</button>
+
+                    @if (Model.Role == "Teacher" && !Model.IsCuratorOnlyForSelectedJournal)
+                    {
+                        <button type="submit" class="btn btn-primary">Зберегти колонку</button>
+                    }
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+<script>
+    document.addEventListener('DOMContentLoaded', function () {
+      document.querySelectorAll('form').forEach(function (form) {
+        form.addEventListener('submit', function () {
+          // Оценки: только изменившиеся
+          form.querySelectorAll('.grade-input').forEach(function (inp) {
+            const initial = (inp.dataset.initial ?? '').trim();
+            const current = (inp.value ?? '').trim();
+            const n = inp.dataset.name;
+
+            // readonly поля вообще не отправляем
+            if (inp.hasAttribute('readonly')) {
+              inp.removeAttribute('name');
+              return;
+            }
+
+            if (current === '') {
+              if (initial === '') {
+                inp.removeAttribute('name'); // пусто было и осталось
+              } else {
+                inp.setAttribute('name', n); // было значение, стало пусто — отправим (удаление)
+              }
+            } else {
+              if (current === initial) {
+                inp.removeAttribute('name'); // не менялось
+              } else {
+                inp.setAttribute('name', n); // изменилось/новое
+              }
+            }
+          });
+
+          // Темы: пустые — не отправляем
+          form.querySelectorAll('select[name^="GradesForUpdate.Topics["]').forEach(function (sel) {
+            if (!sel.value || sel.value.trim() === '') {
+              sel.removeAttribute('name');
+            }
+          });
+
+          // Присутствие: только изменившиеся
+          form.querySelectorAll('.presence-select').forEach(function (sel) {
+            const initial = (sel.dataset.initial ?? '').trim(); // "", "true", "false"
+            const current = (sel.value ?? '').trim();
+            const n = sel.dataset.name;
+
+            // disabled — не отправляем
+            if (sel.hasAttribute('disabled')) {
+              sel.removeAttribute('name');
+              return;
+            }
+
+            if (current === initial) {
+              sel.removeAttribute('name');  // не менялось — не отправляем
+            } else {
+              sel.setAttribute('name', n);  // изменилось — отправляем
+            }
+          });
+        });
+      });
+    });
+</script>

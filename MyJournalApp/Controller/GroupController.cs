@@ -35,7 +35,18 @@ public class GroupController : ControllerBase
         var groups = await _groupRepository.GetAllAsync();
         return Ok(groups);
     }
+    [Authorize]
+    [HttpGet("curated-by/me")]
+    public async Task<IActionResult> GetCuratedGroups()
+    {
+        // Получаем ID текущего пользователя (учителя) из токена
+        var userId = Guid.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier));
 
+        // Вам нужно будет создать метод GetByCuratorIdAsync в вашем репозитории
+        var groups = await _groupRepository.GetByTeacherIdAsync(userId);
+
+        return Ok(groups);
+    }
     [Authorize]
     [HttpGet("my")]
     public async Task<IActionResult> GetMyGroups()
@@ -48,7 +59,7 @@ public class GroupController : ControllerBase
         return Ok(groups);
     }
 
-    [Authorize(Roles = "Student")]
+    [Authorize]
     [HttpGet("student")]
     public async Task<IActionResult> GetStudentGroup()
     {
@@ -77,7 +88,7 @@ public class GroupController : ControllerBase
 
         return Ok(groupUsers);
     }
-    [Authorize(Roles = "Admin")]
+    [Authorize]
     [HttpPut("move-student")]
     public async Task<IActionResult> MoveStudent([FromBody] MoveStudentDto dto)
     {
@@ -137,7 +148,7 @@ public class GroupController : ControllerBase
         return group is null ? NotFound() : Ok(group);
     }
 
-    [Authorize(Roles = "Admin")]
+    [Authorize]
     [HttpPost]
     public async Task<IActionResult> Create([FromBody] Group group)
     {
@@ -174,7 +185,7 @@ public class GroupController : ControllerBase
         return Ok(group);
     }
 
-    [Authorize(Roles = "Admin")]
+    [Authorize]
     [HttpPut("{id}")]
     public async Task<IActionResult> Update(Guid id, [FromBody] Group group)
     {
@@ -230,7 +241,7 @@ public class GroupController : ControllerBase
         return Ok(existing);
     }
 
-    [Authorize(Roles = "Admin")]
+    [Authorize]
     [HttpDelete("{id}")]
     public async Task<IActionResult> Delete(Guid id)
     {
@@ -265,71 +276,145 @@ public class GroupController : ControllerBase
         await _groupRepository.SaveChangesAsync();
         return Ok("Deleted");
     }
-    [Authorize(Roles = "Admin")]
+    [Authorize]
     [HttpPost("bulk-import")]
     public async Task<IActionResult> BulkImportGroups([FromForm] BulkGroupImportDto dto)
     {
         if (dto.File == null || dto.File.Length == 0)
             return BadRequest("Invalid file");
 
+        // 1) Считываем Excel
         using var stream = new MemoryStream();
         await dto.File.CopyToAsync(stream);
+        stream.Position = 0;
+
         using var workbook = new XLWorkbook(stream);
-        var worksheet = workbook.Worksheets.FirstOrDefault();
-        if (worksheet == null) return BadRequest("No worksheet found");
+        var worksheet = workbook.Worksheets.FirstOrDefault(ws => !ws.IsEmpty());
+        if (worksheet == null)
+            return BadRequest("No worksheet found");
 
-        var createdGroups = new List<Group>();
+        // 2) Подготовим справочники ОДИН РАЗ для максимальной производительности
 
-        foreach (var row in worksheet.RowsUsed().Skip(1)) // Пропустить заголовок
+        // Получаем всех пользователей-преподавателей
+        var teacherUsers = (await _userRepository.GetAllAsync()).Where(u => u.Role == "Teacher");
+
+        // Создаем словарь, где ключ - это КОРОТКОЕ ФИО ("Иванов И.И.")
+        // Предполагается, что ToShortName теперь публичный метод в вашем репозитории
+        var usersByShortName = teacherUsers.ToDictionary(
+            u => _teacherRepository.ToShortName(u.FullName).Trim(), // Используем публичный метод
+            u => u,
+            StringComparer.OrdinalIgnoreCase);
+
+        // Загружаем остальные данные для быстрой работы в памяти
+        var allTeachers = await _teacherRepository.GetAllAsync();
+        var teachersById = allTeachers.ToDictionary(t => t.Id);
+
+        var allGroups = await _groupRepository.GetAllAsync();
+        var groupsByName = allGroups.ToDictionary(g => g.Name.Trim(), g => g, StringComparer.OrdinalIgnoreCase);
+
+        var created = new List<Group>();
+        var updated = new List<Group>();
+        var skipped = new List<string>();
+        var updatedteacher = new List<Teacher>();
+        var notFoundTeachers = new List<(string Group, string TeacherRaw)>();
+
+        // 3) Парсим строки надежным способом
+        var lastRowNumber = worksheet.Column(2).LastCellUsed()?.Address.RowNumber;
+        if (!lastRowNumber.HasValue)
+            return BadRequest("No data found in group column (B)");
+
+        // Начинаем с нужной строки (пропуская заголовок, обычно i = 2)
+        for (int i = 2; i <= lastRowNumber.Value; i++)
         {
-            var groupName = row.Cell(2).GetValue<string>().Trim();     // Група
-            var teacherName = row.Cell(3).GetValue<string>().Trim();   // ПІБ керівника
+            var row = worksheet.Row(i);
+            var groupName = row.Cell(2).GetValue<string>().Trim();
+            var teacherNameRaw = row.Cell(3).GetValue<string>().Trim();
 
             if (string.IsNullOrWhiteSpace(groupName))
                 continue;
 
-            // 🔍 Получаем ID преподавателя через репозиторий
-            var teacherId = await _teacherRepository.GetTeacherIdByFullNameAsync(teacherName);
+            // Ищем преподавателя в нашем словаре. Это моментально и без запроса к БД.
+            User teacherUser = null;
+            if (!string.IsNullOrWhiteSpace(teacherNameRaw))
+            {
+                usersByShortName.TryGetValue(teacherNameRaw, out teacherUser);
+            }
+
+            // --- Остальная логика без изменений ---
+
+            // Если группа уже существует — обновляем преподавателя, если нужно
+            if (groupsByName.TryGetValue(groupName, out var existingGroup))
+            {
+                skipped.Add(groupName);
+
+                if (teacherUser != null && existingGroup.TeacherId != teacherUser.Id)
+                {
+                    existingGroup.TeacherId = teacherUser.Id;
+                    updated.Add(existingGroup);
+                    if (teachersById.TryGetValue(teacherUser.Id, out var teacher))
+                    {
+                        teacher.GroupIds ??= new List<Guid>();
+                        if (!teacher.GroupIds.Contains(existingGroup.Id))
+                        {
+                            updatedteacher.Add(teacher);
+                            teacher.GroupIds.Add(existingGroup.Id);
+                        }
+                    }
+                }
+                continue;
+            }
+
+            // Создаем новую группу
+            Guid teacherId = Guid.Empty;
+            if (teacherUser != null)
+            {
+                teacherId = teacherUser.Id;
+            }
+            else if (!string.IsNullOrWhiteSpace(teacherNameRaw))
+            {
+                notFoundTeachers.Add((groupName, teacherNameRaw));
+            }
 
             var group = new Group
             {
                 Id = Guid.NewGuid(),
                 Name = groupName,
-                TeacherId = teacherId ?? Guid.Empty,
+                TeacherId = teacherId,
                 StudentIds = new List<Guid>()
             };
 
             await _groupRepository.AddAsync(group);
-            createdGroups.Add(group);
+            created.Add(group);
 
-            // 🔄 Привязка группы к преподавателю (если найден)
-            if (teacherId.HasValue)
+            if (teacherId != Guid.Empty && teachersById.TryGetValue(teacherId, out var teacherModel))
             {
-                var teacherModel = await _teacherRepository.GetByIdAsync(teacherId.Value);
-                if (teacherModel != null)
-                {
-                    teacherModel.GroupIds ??= new();
-                    if (!teacherModel.GroupIds.Contains(group.Id))
-                    {
-                        teacherModel.GroupIds.Add(group.Id);
-                        await _teacherRepository.Update(teacherModel);
-                    }
-                }
+                teacherModel.GroupIds ??= new List<Guid>();
+                teacherModel.GroupIds.Add(group.Id);
             }
         }
-
+        if(updated.Count > 0)
+        {
+            await _groupRepository.UpdateRange(updated);
+        }
+        if (updatedteacher.Count > 0)
+        {
+            await _teacherRepository.UpdateRange(updatedteacher);
+        }
+        // 4) Сохраняем все изменения одной транзакцией
         await _groupRepository.SaveChangesAsync();
-        await _teacherRepository.SaveChangesAsync();
 
+        // 5) Возвращаем результат
         return Ok(new
         {
-            Message = $"Імпорт завершено. Створено {createdGroups.Count} груп(и).",
-            Groups = createdGroups.Select(g => new { g.Name, g.TeacherId })
+            Message = $"Імпорт завершено. Нових груп створено: {created.Count}. Уже існувало: {skipped.Count}. Оновлено (TeacherId): {updated.Count}.",
+            Created = created.Select(g => new { g.Name, g.TeacherId }),
+            SkippedExisting = skipped,
+            UpdatedTeacher = updated.Select(g => new { g.Name, g.TeacherId }),
+            MissingTeachers = notFoundTeachers.Select(x => new { Group = x.Group, Teacher = x.TeacherRaw })
         });
     }
     public class BulkGroupImportDto
-    {
-        public IFormFile File { get; set; }
-    }
-
+        {
+            public IFormFile File { get; set; }
+        }
 }

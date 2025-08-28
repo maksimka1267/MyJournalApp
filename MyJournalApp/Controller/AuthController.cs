@@ -107,25 +107,34 @@ public class AuthController : ControllerBase
         Response.Cookies.Append("cookies", token, new CookieOptions
         {
             HttpOnly = true,
-            Secure = true,
-            SameSite = SameSiteMode.Strict,
+            Secure = HttpContext.Request.IsHttps,   // ← ключевая правка
+            SameSite = SameSiteMode.Lax,            // ← чтобы навигация после POST сохранила куку
+            Path = "/",
             Expires = DateTimeOffset.UtcNow.AddDays(7)
         });
 
         return Ok("Logged in");
     }
-
     [Authorize]
     [HttpGet("me")]
-    public IActionResult Me()
+    public async Task<IActionResult> Me()
     {
-        var userId = User.FindFirstValue(ClaimTypes.NameIdentifier);
-        var role = User.FindFirstValue(ClaimTypes.Role);
-        var email = User.FindFirstValue(ClaimTypes.Email);
+        var userIdStr = User.FindFirstValue(ClaimTypes.NameIdentifier);
+        if (!Guid.TryParse(userIdStr, out var userId))
+            return Unauthorized();
 
-        return Ok(new { userId, email, role });
+        var user = await _userRepository.GetByIdAsync(userId);
+        if (user == null)
+            return NotFound();
+
+        return Ok(new
+        {
+            user.Id,
+            user.Email,
+            user.Role,
+            user.MustChangePassword
+        });
     }
-
     [Authorize]
     [HttpPost("logout")]
     public IActionResult Logout()
@@ -134,22 +143,28 @@ public class AuthController : ControllerBase
         return Redirect("/Account/Login"); // або твоя сторінка авторизації
     }
 
-
     [Authorize]
     [HttpPut("change-password")]
     public async Task<IActionResult> ChangePassword([FromBody] ChangePasswordDto dto)
     {
-        var userId = Guid.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
+        if (dto is null || string.IsNullOrWhiteSpace(dto.NewPassword))
+            return BadRequest("NewPassword is required.");
+
+        var userIdStr = User.FindFirstValue(ClaimTypes.NameIdentifier);
+        if (!Guid.TryParse(userIdStr, out var userId))
+            return Unauthorized();
+
         var user = await _userRepository.GetByIdAsync(userId);
         if (user == null) return NotFound();
 
+        user.MustChangePassword = false;
         user.PasswordHash = _hasher.Generate(dto.NewPassword);
-        _userRepository.Update(user);
+        await _userRepository.Update(user);
         await _userRepository.SaveChangesAsync();
 
-        return Ok("Password updated");
+        return Ok(new { message = "Password updated" });
     }
-    [Authorize(Roles = "Admin")]
+    [Authorize]
     [HttpPost("bulk-register")]
     public async Task<IActionResult> BulkRegister([FromForm] BulkRegisterDto dto)
     {
@@ -164,6 +179,19 @@ public class AuthController : ControllerBase
         using var workbook = new XLWorkbook(stream);
         var worksheet = workbook.Worksheets.FirstOrDefault();
         if (worksheet == null) return BadRequest("No worksheet found");
+
+        // --- ИЗМЕНЕНИЕ 1: Получаем группу ОДИН РАЗ перед циклом ---
+        Group group = null;
+        if (dto.Role == "Student")
+        {
+            group = await _groupRepository.GetByIdAsync(dto.GroupId.Value);
+            if (group == null)
+            {
+                return BadRequest("Group not found");
+            }
+            // Инициализируем список, если он пуст
+            group.StudentIds ??= new List<Guid>();
+        }
 
         foreach (var row in worksheet.RowsUsed().Skip(1))
         {
@@ -196,16 +224,11 @@ public class AuthController : ControllerBase
                         Id = id,
                         GroupId = dto.GroupId.Value
                     });
-
-                    var group = await _groupRepository.GetByIdAsync(dto.GroupId.Value);
                     if (group != null)
                     {
-                        group.StudentIds ??= new List<Guid>();
                         group.StudentIds.Add(id);
-                        await _groupRepository.Update(group); // Убедитесь, что метод обновления есть
                     }
                     break;
-
 
                 case "Teacher":
                     await _teacherRepository.AddAsync(new Teacher { Id = id });
@@ -216,10 +239,15 @@ public class AuthController : ControllerBase
             }
         }
 
+        // --- ИЗМЕНЕНИЕ 3: Обновляем группу ОДИН РАЗ после цикла ---
+        if (dto.Role == "Student" && group != null)
+        {
+            await _groupRepository.Update(group);
+        }
+
         await _userRepository.SaveChangesAsync();
         await _studentRepository.SaveChangesAsync();
         await _teacherRepository.SaveChangesAsync();
-
         return Ok("Bulk registration complete");
     }
     // DTOs

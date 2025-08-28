@@ -35,11 +35,12 @@ public class GradeController : ControllerBase
             Console.WriteLine("ID Student:",grade.StudentId);
             Console.WriteLine("Value:",grade.Value);
             Console.WriteLine("Comment:",grade.Comment);
-            if (grade.Value != 0)
+            if(grade.Value == 0)
             {
-                await _gradeRepo.AddAsync(grade);
-                await _gradeRepo.SaveChangesAsync();
+                grade.Value = null;
             }
+            await _gradeRepo.AddAsync(grade);
+            await _gradeRepo.SaveChangesAsync();
             return Ok(grade);
         }
         catch (Exception ex)
@@ -58,12 +59,20 @@ public class GradeController : ControllerBase
 
         existing.Value = grade.Value;
         existing.Comment = grade.Comment;
+        existing.IsPresent = grade.IsPresent;          // <-- раньше терялось
 
-        _gradeRepo.Update(existing);
-        await _gradeRepo.SaveChangesAsync();
+        await _gradeRepo.Update(existing);
         return Ok(existing);
     }
-    [Authorize(Roles = "Student")]
+    // 👇 ДОБАВЬТЕ ЭТОТ НОВЫЙ ЭНДПОИНТ
+    [Authorize]
+    [HttpGet("journal/{journalId}/date/{date:datetime}")]
+    public async Task<IActionResult> GetByJournalAndDate(Guid journalId, DateTime date)
+    {
+        var grades = await _gradeRepo.GetByJournalAndDateAsync(journalId, date);
+        return Ok(grades);
+    }
+    [Authorize]
     [HttpGet("byStudent/{studentId}")]
     public async Task<IActionResult> GetByStudent(Guid studentId)
     {
@@ -78,7 +87,7 @@ public class GradeController : ControllerBase
         var grade = await _gradeRepo.GetByIdAsync(id);
         if (grade == null) return NotFound();
 
-        _gradeRepo.Delete(grade);
+        await _gradeRepo.Delete(grade);
         await _gradeRepo.SaveChangesAsync();
         return Ok("Deleted");
     }

@@ -1,35 +1,31 @@
 ﻿using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
-using Microsoft.AspNetCore.Mvc.Rendering;
 using MyJournalApp.Data.Models;
-using System.Net.Http;
 using System.Net.Http.Headers;
+using System.Net.Http.Json;
 
 public class UsersModel : PageModel
 {
-    private readonly HttpClient _httpClient;
+    private readonly IHttpClientFactory _httpClientFactory;
 
     public UsersModel(IHttpClientFactory factory)
     {
-        _httpClient = factory.CreateClient("ApiClient");
+        _httpClientFactory = factory;
     }
 
     public List<User> Users { get; set; } = new();
     public List<Group> Groups { get; set; } = new();
-
-    [BindProperty(SupportsGet = true)] public string SearchTerm { get; set; }
-    [BindProperty(SupportsGet = true)] public string SelectedRole { get; set; }
-    [BindProperty]
-    public Guid TeacherId { get; set; }
-
-    [BindProperty]
-    public bool IsAdminFlag { get; set; }
     public Dictionary<Guid, bool> TeacherAdminStatus { get; set; } = new();
 
+    [BindProperty(SupportsGet = true)] public string SearchTerm { get; set; } = string.Empty;
+    [BindProperty(SupportsGet = true)] public string SelectedRole { get; set; } = string.Empty;
+
+    [BindProperty] public Guid TeacherId { get; set; }
+    [BindProperty] public bool IsAdminFlag { get; set; }
 
     // Новые модели
-    [BindProperty] public CreateUserModel NewUser { get; set; }
-    [BindProperty] public UploadExcelModel ExcelUpload { get; set; }
+    [BindProperty] public CreateUserModel NewUser { get; set; } = new();
+    [BindProperty] public UploadExcelModel ExcelUpload { get; set; } = new();
 
     public IEnumerable<User> FilteredUsers =>
         Users.Where(u =>
@@ -38,25 +34,32 @@ public class UsersModel : PageModel
 
     public async Task<IActionResult> OnGetAsync(string? search, string? role)
     {
-        var token = Request.Cookies["cookies"];
-        if (string.IsNullOrEmpty(token)) return RedirectToPage("/Account/Login");
-
-        _httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        if (!Request.Cookies.TryGetValue("cookies", out var jwt) || string.IsNullOrWhiteSpace(jwt))
+            return RedirectToPage("/Account/Login");
 
         SearchTerm = search ?? string.Empty;
         SelectedRole = role ?? string.Empty;
 
-        var query = new List<string>();
-        if (!string.IsNullOrEmpty(SearchTerm))
-            query.Add($"search={SearchTerm}");
-        if (!string.IsNullOrEmpty(SelectedRole))
-            query.Add($"role={SelectedRole}");
+        var client = _httpClientFactory.CreateClient();
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", jwt);
 
-        var queryString = query.Any() ? "?" + string.Join("&", query) : string.Empty;
+        // querystring
+        var qs = new List<string>();
+        if (!string.IsNullOrEmpty(SearchTerm)) qs.Add($"search={Uri.EscapeDataString(SearchTerm)}");
+        if (!string.IsNullOrEmpty(SelectedRole)) qs.Add($"role={Uri.EscapeDataString(SelectedRole)}");
+        var query = qs.Count > 0 ? "?" + string.Join("&", qs) : string.Empty;
 
-        Users = await _httpClient.GetFromJsonAsync<List<User>>($"api/User/users{queryString}") ?? new();
-        Groups = await _httpClient.GetFromJsonAsync<List<Group>>("api/Group/all") ?? new();
-        var teachers = await _httpClient.GetFromJsonAsync<List<Teacher>>("api/User/teachers-admin-status") ?? new();
+        // параллельные запросы
+        var usersTask = client.GetFromJsonAsync<List<User>>(ApiUrl($"/api/User/users{query}"));
+        var groupsTask = client.GetFromJsonAsync<List<Group>>(ApiUrl("/api/Group/all"));
+        var teachersTask = client.GetFromJsonAsync<List<Teacher>>(ApiUrl("/api/User/teachers-admin-status"));
+
+        await Task.WhenAll(usersTask!, groupsTask!, teachersTask!);
+
+        Users = usersTask?.Result ?? new();
+        Groups = groupsTask?.Result ?? new();
+        var teachers = teachersTask?.Result ?? new();
+
         TeacherAdminStatus = teachers.ToDictionary(t => t.Id, t => t.IsAdmin);
 
         return Page();
@@ -73,94 +76,93 @@ public class UsersModel : PageModel
 
     public async Task<IActionResult> OnPostAsync(Guid? id)
     {
-        var token = Request.Cookies["cookies"];
-        if (string.IsNullOrEmpty(token)) return RedirectToPage("/Account/Login");
+        if (!Request.Cookies.TryGetValue("cookies", out var jwt) || string.IsNullOrWhiteSpace(jwt))
+            return RedirectToPage("/Account/Login");
 
-        _httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
-        if (ExcelUpload != null && ExcelUpload.File != null && ExcelUpload.File.Length > 0)
+        var client = _httpClientFactory.CreateClient();
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", jwt);
+
+        // 1) Импорт из Excel
+        if (ExcelUpload?.File is not null && ExcelUpload.File.Length > 0)
         {
-            await UploadExcelAsync();
+            using var content = new MultipartFormDataContent();
+            content.Add(new StreamContent(ExcelUpload.File.OpenReadStream()), "File", ExcelUpload.File.FileName);
+            content.Add(new StringContent(ExcelUpload.Role ?? string.Empty), "Role");
+            if (ExcelUpload.GroupId.HasValue)
+                content.Add(new StringContent(ExcelUpload.GroupId.Value.ToString()), "GroupId");
+
+            var resp = await client.PostAsync(ApiUrl("/api/Auth/bulk-register"), content);
+            if (!resp.IsSuccessStatusCode)
+                ModelState.AddModelError(string.Empty, "Помилка при завантаженні Excel.");
+
             return RedirectToPage();
         }
+
+        // 2) Обновление статуса админа у викладача
         if (TeacherId != Guid.Empty)
         {
-            await UpdateTeacherAdminStatusAsync();
+            var payload = new { TeacherId, IsAdmin = IsAdminFlag };
+            var resp = await client.PutAsJsonAsync(ApiUrl("/api/User/update-teacher-admin"), payload);
+            if (!resp.IsSuccessStatusCode)
+                ModelState.AddModelError(string.Empty, "Не вдалося змінити статус адміністратора.");
+
             return RedirectToPage();
         }
-        // 3️⃣ Создание нового пользователя
-        if (NewUser != null && !string.IsNullOrEmpty(NewUser.Email))
+
+        // 3) Создание нового пользователя
+        if (!string.IsNullOrWhiteSpace(NewUser?.Email))
         {
-            await CreateUserAsync();
+            using var content = new MultipartFormDataContent
+            {
+                { new StringContent(NewUser.FullName ?? string.Empty), "FullName" },
+                { new StringContent(NewUser.Email), "Email" },
+                { new StringContent(NewUser.Password ?? string.Empty), "Password" },
+                { new StringContent(NewUser.Role ?? string.Empty), "Role" }
+            };
+            if (NewUser.GroupId.HasValue)
+                content.Add(new StringContent(NewUser.GroupId.Value.ToString()), "GroupId");
+
+            var resp = await client.PostAsync(ApiUrl("/api/Auth/register"), content);
+            if (!resp.IsSuccessStatusCode)
+                ModelState.AddModelError(string.Empty, "Помилка при створенні користувача.");
+
             return RedirectToPage();
         }
-        // 1️⃣ Удаление пользователей
-        if (id.HasValue && id != Guid.Empty)
+
+        // 4) Удаление (конкретного или всех)
+        if (id.HasValue && id.Value != Guid.Empty)
         {
-         var response = await _httpClient.DeleteAsync($"api/User/delete/{id}");
-         if (!response.IsSuccessStatusCode)
-            ModelState.AddModelError(string.Empty, "Не вдалося видалити користувача.");
+            var resp = await client.DeleteAsync(ApiUrl($"/api/User/delete/{id}"));
+            if (!resp.IsSuccessStatusCode)
+                ModelState.AddModelError(string.Empty, "Не вдалося видалити користувача.");
         }
         else
         {
-            await _httpClient.DeleteAsync($"api/User/delete-all");
+            await client.DeleteAsync(ApiUrl("/api/User/delete-all"));
         }
+
         return RedirectToPage();
     }
-    private async Task UpdateTeacherAdminStatusAsync()
-    {
-        var payload = new { TeacherId, IsAdmin = IsAdminFlag };
-        var response = await _httpClient.PutAsJsonAsync("api/User/update-teacher-admin", payload);
 
-        if (!response.IsSuccessStatusCode)
-            ModelState.AddModelError(string.Empty, "Не вдалося змінити статус адміністратора.");
+    private string ApiUrl(string relativePath)
+    {
+        var path = relativePath.StartsWith("/") ? relativePath : "/" + relativePath;
+        return $"{Request.Scheme}://{Request.Host}{path}";
     }
 
-    private async Task UploadExcelAsync()
-    {
-        using var content = new MultipartFormDataContent();
-        content.Add(new StreamContent(ExcelUpload.File.OpenReadStream()), "File", ExcelUpload.File.FileName);
-        content.Add(new StringContent(ExcelUpload.Role), "Role");
-        if (ExcelUpload.GroupId.HasValue)
-            content.Add(new StringContent(ExcelUpload.GroupId.Value.ToString()), "GroupId");
-
-        var response = await _httpClient.PostAsync("api/Auth/bulk-register", content);
-        if (!response.IsSuccessStatusCode)
-            ModelState.AddModelError(string.Empty, "Помилка при завантаженні Excel.");
-    }
-
-    private async Task CreateUserAsync()
-    {
-        var content = new MultipartFormDataContent
-        {
-            { new StringContent(NewUser.FullName), "FullName" },
-            { new StringContent(NewUser.Email), "Email" },
-            { new StringContent(NewUser.Password), "Password" },
-            { new StringContent(NewUser.Role), "Role" }
-        };
-
-        if (NewUser.GroupId.HasValue)
-            content.Add(new StringContent(NewUser.GroupId.Value.ToString()), "GroupId");
-
-        var response = await _httpClient.PostAsync("api/Auth/register", content);
-        if (!response.IsSuccessStatusCode)
-            ModelState.AddModelError(string.Empty, "Помилка при створенні користувача.");
-    }
     public class CreateUserModel
     {
-        public string FullName { get; set; }
-
-        public string Email { get; set; }
-
-        public string Password { get; set; }
-
-        public string Role { get; set; }
+        public string FullName { get; set; } = string.Empty;
+        public string Email { get; set; } = string.Empty;
+        public string Password { get; set; } = string.Empty;
+        public string Role { get; set; } = string.Empty;
         public Guid? GroupId { get; set; }
     }
+
     public class UploadExcelModel
     {
-        public IFormFile File { get; set; }
-        public string Role { get; set; }
+        public IFormFile? File { get; set; }
+        public string Role { get; set; } = string.Empty;
         public Guid? GroupId { get; set; }
     }
-
 }

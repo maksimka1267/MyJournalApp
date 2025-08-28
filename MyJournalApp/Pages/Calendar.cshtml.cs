@@ -1,6 +1,7 @@
 ﻿using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
 using System.Net.Http.Headers;
+using System.Net.Http.Json;
 using System.Security.Claims;
 using static AcademicProcessController;
 
@@ -11,7 +12,7 @@ public class CalendarModel : PageModel
 
     public CalendarModel(IHttpClientFactory httpClientFactory, IHttpContextAccessor httpContextAccessor)
     {
-        _httpClient = httpClientFactory.CreateClient("ApiClient");
+        _httpClient = httpClientFactory.CreateClient(); // без BaseAddress
         _httpContextAccessor = httpContextAccessor;
     }
 
@@ -32,43 +33,57 @@ public class CalendarModel : PageModel
         if (string.IsNullOrEmpty(token)) return RedirectToPage("/Account/Login");
 
         _httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
+
         var userId = GetCurrentUserId();
         Role = GetCurrentUserRole();
 
-        // Получить список всех групп
-        AllGroups = await _httpClient.GetFromJsonAsync<List<Group>>("api/group/all");
+        // Группы и выбор текущей группы
+        AllGroups = await _httpClient.GetFromJsonAsync<List<Group>>(ApiUrl("/api/Group/all")) ?? new();
 
-        // Определить группу
         if (Role == "Student")
             SelectedGroupId = AllGroups.FirstOrDefault(g => g.StudentIds.Contains(userId))?.Id ?? Guid.Empty;
-        else if (Role == "Teacher")
-            SelectedGroupId = AllGroups.FirstOrDefault(g => g.TeacherId == userId)?.Id ?? Guid.Empty;
-        else if (Role == "Admin")
+        else
             SelectedGroupId = groupId ?? AllGroups.FirstOrDefault()?.Id ?? Guid.Empty;
 
         if (SelectedGroupId == Guid.Empty)
-            return Page(); // Группа не найдена
+            return Page();
 
-        // Учебный год
-        var currentMonth = DateTime.Now.Month;
-        var year = currentMonth >= 7 ? DateTime.Now.Year : DateTime.Now.Year - 1;
+        // === Учебный период: 1 сентября (академ. стартовый год) -> 30 июня (следующий год)
+        var now = DateTime.Now;
+        var academicStartYear = (now.Month >= 7) ? now.Year : now.Year-1;
 
-        // Получить события из API
-        var existingEvents = await _httpClient.GetFromJsonAsync<List<AcademicEvent>>(
-            $"api/academicprocess/{SelectedGroupId}/{year}") ?? new();
+        var sept1 = new DateTime(academicStartYear, 9, 1);
+        var juneEnd = new DateTime(academicStartYear + 1, 6, DateTime.DaysInMonth(academicStartYear + 1, 6));
 
-        // Заполнить недостающие недели
+        var periodStart = NextMondayOrSame(sept1);
+        var periodEnd = EndOfWeekSunday(juneEnd);
+
+        // Тянем события по двум годам
+        var evY1 = await _httpClient.GetFromJsonAsync<List<AcademicEvent>>(
+            ApiUrl($"/api/AcademicProcess/{SelectedGroupId}/{academicStartYear}")) ?? new();
+
+        var evY2 = await _httpClient.GetFromJsonAsync<List<AcademicEvent>>(
+            ApiUrl($"/api/AcademicProcess/{SelectedGroupId}/{academicStartYear + 1}")) ?? new();
+
+        var existingEvents = evY1.Concat(evY2)
+            .Where(e => e.StartDate.Date >= sept1.Date && e.EndDate.Date <= periodEnd.Date)
+            .ToList();
+
+        // Строим сетку недель Пн–Вс
         var fullYearEvents = new List<AcademicEvent>();
-        var firstWeekStart = new DateTime(year, 1, 1);
-
-        for (int week = 1; week <= 52; week++)
+        int weekIndex = 1;
+        for (var weekStart = periodStart; weekStart <= periodEnd; weekStart = weekStart.AddDays(7), weekIndex++)
         {
-            var startDate = firstWeekStart.AddDays((week - 1) * 7);
-            var endDate = startDate.AddDays(6);
+            var weekEnd = EndOfWeekSunday(weekStart);
 
-            var existing = existingEvents.FirstOrDefault(e => e.WeekNumber == week);
+            var existing = existingEvents.FirstOrDefault(e =>
+                e.StartDate.Date == weekStart.Date && e.EndDate.Date == weekEnd.Date);
+
             if (existing != null)
             {
+                existing.WeekNumber = weekIndex;
+                existing.Year = weekStart.Year;
+                existing.Month = weekStart.Month;
                 fullYearEvents.Add(existing);
             }
             else
@@ -77,48 +92,64 @@ public class CalendarModel : PageModel
                 {
                     Id = Guid.NewGuid(),
                     GroupId = SelectedGroupId,
-                    Year = year,
-                    WeekNumber = week,
-                    Month = startDate.Month,
+                    Year = weekStart.Year,
+                    Month = weekStart.Month,
+                    WeekNumber = weekIndex,
                     Type = AcademicWeekType.Lecture,
-                    StartDate = startDate,
-                    EndDate = endDate
+                    StartDate = weekStart,
+                    EndDate = weekEnd
                 });
             }
         }
 
         DisplayEvents = fullYearEvents;
-        // Если мы в режиме редактирования — скопировать DisplayEvents -> EditableEvents
+
+        // Режим редактирования — переносим в DTO
         if (Request.Query["edit"] == "true")
         {
-            EditableEvents = DisplayEvents
-                .Select(ev => new AcademicEventDto
-                {
-                    Id = ev.Id,
-                    GroupId = ev.GroupId,
-                    Year = ev.Year,
-                    Month = ev.Month,
-                    WeekNumber = ev.WeekNumber,
-                    Type = ev.Type,
-                    StartDate = ev.StartDate,
-                    EndDate = ev.EndDate
-                }).ToList();
+            EditableEvents = DisplayEvents.Select(ev => new AcademicEventDto
+            {
+                Id = ev.Id,
+                GroupId = ev.GroupId,
+                Year = ev.Year,
+                Month = ev.Month,
+                WeekNumber = ev.WeekNumber,
+                Type = ev.Type,
+                StartDate = ev.StartDate,
+                EndDate = ev.EndDate
+            }).ToList();
 
-            ModelState.Clear(); // сбросить кеш
+            ModelState.Clear();
         }
+
         return Page();
+
+        // ====== Локальные функции (без отката в август) ======
+        static DateTime NextMondayOrSame(DateTime date)
+        {
+            int diff = ((int)DayOfWeek.Monday - (int)date.DayOfWeek + 7) % 7;
+            return date.Date.AddDays(diff);
+        }
+
+        static DateTime EndOfWeekSunday(DateTime date)
+        {
+            int shiftToSunday = ((int)DayOfWeek.Sunday - (int)date.DayOfWeek + 7) % 7;
+            return date.Date.AddDays(shiftToSunday);
+        }
     }
 
     public async Task<IActionResult> OnPostAsync()
     {
         if (!ModelState.IsValid)
             return Page();
-        Console.WriteLine($"⏳ EditableEvents.Count = {EditableEvents?.Count}");
+
         var token = Request.Cookies["cookies"];
         if (string.IsNullOrEmpty(token)) return RedirectToPage("/Account/Login");
 
         _httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
-        var response = await _httpClient.PutAsJsonAsync("/api/academicprocess/bulk", EditableEvents);
+
+        var putUrl = ApiUrl("/api/AcademicProcess/bulk");
+        var response = await _httpClient.PutAsJsonAsync(putUrl, EditableEvents);
 
         if (!response.IsSuccessStatusCode)
         {
@@ -142,5 +173,13 @@ public class CalendarModel : PageModel
         if (user?.IsInRole("Teacher") == true) return "Teacher";
         if (user?.IsInRole("Student") == true) return "Student";
         return "";
+    }
+
+    // Собираем абсолютный URL к своему же API (тот же хост/схема, что и страница)
+    private string ApiUrl(string relativePath)
+    {
+        // нормализуем: всегда с одним ведущим слешем
+        var path = relativePath.StartsWith("/") ? relativePath : "/" + relativePath;
+        return $"{Request.Scheme}://{Request.Host}{path}";
     }
 }

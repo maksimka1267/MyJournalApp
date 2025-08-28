@@ -12,22 +12,18 @@ public class GroupsModel : PageModel
 
     public GroupsModel(IHttpClientFactory httpClientFactory)
     {
-        _httpClient = httpClientFactory.CreateClient("ApiClient");
+        _httpClient = httpClientFactory.CreateClient(); // без BaseAddress
     }
 
     public List<GroupWithDetails> GroupsWithDetails { get; set; } = new();
     public List<User> AllTeachers { get; set; } = new();
     public Dictionary<Guid, string> TeacherNames { get; set; } = new();
 
-    // 📌 Модель для импорта Excel
     [BindProperty] public GroupExcelImportModel ExcelImport { get; set; }
-
-    // 📌 Модель перемещения студента
     [BindProperty] public MoveStudentModel MoveStudent { get; set; }
-
-    // 📌 Для создания группы
     [BindProperty] public string GroupName { get; set; } = "";
     [BindProperty] public Guid TeacherId { get; set; }
+    [BindProperty] public ReportRequestModel Report { get; set; }
 
     public class GroupWithDetails
     {
@@ -45,18 +41,18 @@ public class GroupsModel : PageModel
 
         _httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
 
-        var me = await _httpClient.GetFromJsonAsync<User>("api/Auth/me");
+        var me = await _httpClient.GetFromJsonAsync<User>(ApiUrl("/api/Auth/me"));
         if (me == null) return RedirectToPage("/Account/Login");
 
         var groups = me.Role switch
         {
-            "Admin" => await _httpClient.GetFromJsonAsync<List<Group>>("api/Group/all") ?? new(),
-            "Teacher" => await _httpClient.GetFromJsonAsync<List<Group>>("api/Group/my") ?? new(),
-            "Student" => await _httpClient.GetFromJsonAsync<List<Group>>("api/Group/student") ?? new(),
+            "Admin" => await _httpClient.GetFromJsonAsync<List<Group>>(ApiUrl("/api/Group/all")) ?? new(),
+            "Teacher" => await _httpClient.GetFromJsonAsync<List<Group>>(ApiUrl("/api/Group/my")) ?? new(),
+            "Student" => await _httpClient.GetFromJsonAsync<List<Group>>(ApiUrl("/api/Group/student")) ?? new(),
             _ => new()
         };
 
-        AllTeachers = await _httpClient.GetFromJsonAsync<List<User>>("api/User/teachers") ?? new();
+        AllTeachers = await _httpClient.GetFromJsonAsync<List<User>>(ApiUrl("/api/User/teachers")) ?? new();
         TeacherNames = AllTeachers.ToDictionary(
             t => t.Id,
             t => string.IsNullOrWhiteSpace(t.FullName) ? "Без імені" : t.FullName
@@ -73,7 +69,7 @@ public class GroupsModel : PageModel
                 groupDetails.TeacherEmail = teacher.Email;
             }
 
-            var students = await _httpClient.GetFromJsonAsync<List<User>>($"api/Group/{group.Id}/users");
+            var students = await _httpClient.GetFromJsonAsync<List<User>>(ApiUrl($"/api/Group/{group.Id}/users"));
             groupDetails.Students = students ?? new();
 
             GroupsWithDetails.Add(groupDetails);
@@ -82,7 +78,7 @@ public class GroupsModel : PageModel
         return Page();
     }
 
-    public async Task<IActionResult> OnPostAsync()
+    public async Task<IActionResult> OnPostAsync(string handler)
     {
         var token = Request.Cookies["cookies"];
         if (string.IsNullOrEmpty(token))
@@ -90,22 +86,51 @@ public class GroupsModel : PageModel
 
         _httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
 
-        // 1️⃣ Импорт Excel
-        if (ExcelImport != null && ExcelImport.File != null && ExcelImport.File.Length > 0)
+        return handler switch
         {
-            await ImportGroupsFromExcelAsync();
-            return RedirectToPage();
-        }
+            "ImportExcel" => await ImportGroupsFromExcelAsync(),
+            "MoveStudent" => await MoveStudentAsync(),
+            "CreateGroup" => await CreateGroupAsync(),
+            "GenerateReport" => await GenerateReportAsync(),
+            _ => Page()
+        };
+    }
 
-        // 2️⃣ Перемещение студента
-        if (MoveStudent != null && MoveStudent.StudentId != Guid.Empty &&
-            MoveStudent.FromGroupId != Guid.Empty && MoveStudent.ToGroupId != Guid.Empty)
-        {
-            await MoveStudentAsync();
-            return RedirectToPage();
-        }
+    private async Task<IActionResult> ImportGroupsFromExcelAsync()
+    {
+        if (ExcelImport?.File == null || ExcelImport.File.Length == 0)
+            return Page();
 
-        // 3️⃣ Создание группы
+        using var content = new MultipartFormDataContent();
+        content.Add(new StreamContent(ExcelImport.File.OpenReadStream()), "File", ExcelImport.File.FileName);
+
+        var resp = await _httpClient.PostAsync(ApiUrl("/api/Group/bulk-import"), content);
+        if (!resp.IsSuccessStatusCode)
+            TempData["Error"] = "Помилка при імпорті груп з Excel.";
+
+        return RedirectToPage();
+    }
+
+    private async Task<IActionResult> MoveStudentAsync()
+    {
+        if (MoveStudent == null ||
+            MoveStudent.StudentId == Guid.Empty ||
+            MoveStudent.FromGroupId == Guid.Empty ||
+            MoveStudent.ToGroupId == Guid.Empty)
+            return Page();
+
+        var resp = await _httpClient.PutAsJsonAsync(ApiUrl("/api/Group/move-student"), MoveStudent);
+        if (!resp.IsSuccessStatusCode)
+            TempData["Error"] = "Не вдалося перемістити студента.";
+
+        return RedirectToPage();
+    }
+
+    private async Task<IActionResult> CreateGroupAsync()
+    {
+        if (string.IsNullOrWhiteSpace(GroupName) || TeacherId == Guid.Empty)
+            return Page();
+
         var newGroup = new Group
         {
             Id = Guid.NewGuid(),
@@ -113,8 +138,8 @@ public class GroupsModel : PageModel
             TeacherId = TeacherId
         };
 
-        var response = await _httpClient.PostAsJsonAsync("api/Group", newGroup);
-        if (!response.IsSuccessStatusCode)
+        var resp = await _httpClient.PostAsJsonAsync(ApiUrl("/api/Group"), newGroup);
+        if (!resp.IsSuccessStatusCode)
         {
             TempData["Error"] = "Не вдалося створити групу.";
             return Page();
@@ -123,36 +148,50 @@ public class GroupsModel : PageModel
         return RedirectToPage();
     }
 
-    // 📌 Локальный метод для Excel импорта
-    private async Task ImportGroupsFromExcelAsync()
+    private async Task<IActionResult> GenerateReportAsync()
     {
-        using var content = new MultipartFormDataContent();
-        content.Add(new StreamContent(ExcelImport.File.OpenReadStream()), "File", ExcelImport.File.FileName);
+        if (Report == null || Report.GroupId == Guid.Empty || Report.StartDate == default || Report.EndDate == default)
+            return Page();
 
-        var response = await _httpClient.PostAsync("api/Group/bulk-import", content);
-        if (!response.IsSuccessStatusCode)
-            TempData["Error"] = "Помилка при імпорті груп з Excel.";
+        var url = ApiUrl($"/api/Report/absences/group/{Report.GroupId}?startDate={Report.StartDate:yyyy-MM-dd}&endDate={Report.EndDate:yyyy-MM-dd}");
+        var resp = await _httpClient.GetAsync(url);
+
+        if (!resp.IsSuccessStatusCode)
+        {
+            TempData["Error"] = "Не вдалося згенерувати рапортичку.";
+            return RedirectToPage();
+        }
+
+        var disposition = resp.Content.Headers.ContentDisposition;
+        var fileName = disposition?.FileNameStar ?? disposition?.FileName ?? $"Рапортичка_{Report.GroupId}.xlsx";
+
+        var bytes = await resp.Content.ReadAsByteArrayAsync();
+        return File(bytes, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", fileName);
     }
 
-    // 📌 Локальный метод перемещения студента
-    private async Task MoveStudentAsync()
+    private string ApiUrl(string relativePath)
     {
-        var response = await _httpClient.PutAsJsonAsync("api/Group/move-student", MoveStudent);
-        if (!response.IsSuccessStatusCode)
-            TempData["Error"] = "Не вдалося перемістити студента.";
+        var path = relativePath.StartsWith("/") ? relativePath : "/" + relativePath;
+        return $"{Request.Scheme}://{Request.Host}{path}";
     }
 }
 
-// 📌 Модель для импорта Excel
+// Модели
 public class GroupExcelImportModel
 {
     public IFormFile File { get; set; }
 }
 
-// 📌 Модель перемещения студента
 public class MoveStudentModel
 {
     public Guid StudentId { get; set; }
     public Guid FromGroupId { get; set; }
     public Guid ToGroupId { get; set; }
+}
+
+public class ReportRequestModel
+{
+    public Guid GroupId { get; set; }
+    public DateTime StartDate { get; set; }
+    public DateTime EndDate { get; set; }
 }

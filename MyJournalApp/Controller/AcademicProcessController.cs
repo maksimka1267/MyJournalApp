@@ -62,7 +62,7 @@ public class AcademicProcessController : ControllerBase
         return Ok(existing);
     }
 
-    [Authorize(Roles = "Admin")]
+    [Authorize]
     [HttpDelete("{id}")]
     public async Task<IActionResult> DeleteEvent(Guid id)
     {
@@ -74,7 +74,7 @@ public class AcademicProcessController : ControllerBase
 
         return Ok("Deleted");
     }
-    [Authorize(Roles = "Admin")]
+    [Authorize]
     [HttpPut("bulk")]
     public async Task<IActionResult> BulkUpdate([FromBody] List<AcademicEventDto> events)
     {

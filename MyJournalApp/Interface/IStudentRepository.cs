@@ -4,6 +4,7 @@
     {
         Task<IEnumerable<Student>> GetByGroupIdAsync(Guid groupId);
         Task<List<User>> GetAllStudentsAsync();
+        Task<List<User>> GetUsersByGroupIdAsync(Guid groupId);
 
     }
 

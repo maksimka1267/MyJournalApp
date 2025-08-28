@@ -22,7 +22,7 @@ public class UserController : ControllerBase
         _teacherRepository = teacherRepository;
         _userRepository = userRepository;
     }
-    [Authorize(Roles = "Admin")]
+    [Authorize]
     [HttpPut("update-teacher-admin")]
     public async Task<IActionResult> UpdateTeacherAdmin([FromBody] UpdateTeacherAdminDto dto)
     {
@@ -42,7 +42,7 @@ public class UserController : ControllerBase
         public Guid TeacherId { get; set; }
         public bool IsAdmin { get; set; }
     }
-    [Authorize(Roles = "Admin")]
+    [Authorize]
     [HttpGet("teachers-admin-status")]
     public async Task<IActionResult> GetTeachersAdminStatus()
     {
@@ -73,7 +73,7 @@ public class UserController : ControllerBase
         var students = await _studentRepository.GetAllStudentsAsync();
         return Ok(students);
     }
-    [Authorize(Roles = "Admin")]
+    [Authorize]
     [HttpPut("{studentId}/change-group/{newGroupId}")]
     public async Task<IActionResult> ChangeGroup(Guid studentId, Guid newGroupId)
     {
@@ -85,7 +85,7 @@ public class UserController : ControllerBase
 
         return NoContent();
     }
-    [Authorize(Roles = "Admin")]
+    [Authorize]
     [HttpDelete("delete/{id}")]
     public async Task<IActionResult> Delete(Guid id)
     {
@@ -109,19 +109,50 @@ public class UserController : ControllerBase
             return StatusCode(500, new { message = "Ошибка при видалені користувачей", error = ex.Message });
         }
     }
+    [Authorize]
+    [HttpGet("by-group/{groupId}")]
+    public async Task<IActionResult> GetStudentsByGroup(Guid groupId)
+    {
+        if (groupId == Guid.Empty)
+        {
+            return BadRequest("Неверный ID группы.");
+        }
+
+        // Вызываем новый эффективный метод из репозитория
+        var users = await _studentRepository.GetUsersByGroupIdAsync(groupId);
+
+        // Проверяем, найдены ли студенты. Возвращаем пустой список, если нет.
+        if (users == null)
+        {
+            return Ok(new List<User>());
+        }
+
+        return Ok(users);
+    }
     // Отримати одного вчителя
     [Authorize]
-    [HttpGet("teacher/{id}")]
-    public async Task<IActionResult> GetTeacherById(Guid id)
+    [HttpGet("teacher")]
+    public async Task<IActionResult> GetTeachersByIds([FromQuery] List<Guid> ids)
     {
-        var teacher = await _userRepository.GetByIdAsync(id);
-        return teacher is null ? NotFound() : Ok(teacher);
+        if (ids == null || ids.Count == 0)
+            return BadRequest("No teacher IDs provided.");
+
+        var teachers = await _userRepository.GetByIdsAsync(ids.Distinct());
+        return Ok(teachers);
     }
+
     [Authorize]
     [HttpGet("teacher-model/{id}")]
     public async Task<IActionResult> GetTeacherModelById(Guid id)
     {
         var teacher = await _teacherRepository.GetByIdAsync(id);
+        return teacher is null ? NotFound() : Ok(teacher);
+    }
+    [Authorize]
+    [HttpGet("teacher/{id}")]
+    public async Task<IActionResult> GetTeacherById(Guid id)
+    {
+        var teacher = await _userRepository.GetByIdAsync(id);
         return teacher is null ? NotFound() : Ok(teacher);
     }
     // Отримати одного студента

@@ -4,66 +4,86 @@
 @{
     Layout = "_Layout";
     ViewData["Title"] = "Розклад";
-
     var isAdmin = Model.Role == "Admin";
     var isTeacher = Model.Role == "Teacher";
     var isStudent = Model.Role == "Student";
     var userId = User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
     var selectedDateTime = Model.SelectedDate.ToDateTime(TimeOnly.FromDateTime(DateTime.Now));
-}
-
-<h2 class="mb-4">Розклад</h2>
-@{
     var ukCulture = new CultureInfo("uk-UA");
 }
-<p class="text-muted">@Model.SelectedDate.ToString("dddd, dd MMMM yyyy", ukCulture)</p>
+@functions {
+    // Старт кожної пари (налаштуй під свій коледж)
+    // Ти писав: 1-я = 08:00, 2-я = 10:10, 3-я = 11:20, «і так далі».
+    // Я додав приклад на 8 пар — відредагуй за потреби.
+    private static readonly TimeSpan[] PairStarts = new[]
+    {
+        new TimeSpan(8,  0, 0),   // 1 пара  08:00
+        new TimeSpan(10, 10, 0),  // 2 пара  10:10
+        new TimeSpan(11, 20, 0),  // 3 пара  11:20
+        new TimeSpan(13, 30, 0),  // 4 пара  13:30
+        new TimeSpan(14, 40, 0),  // 5 пара  14:40
+        new TimeSpan(15, 50, 0),  // 6 пара  15:50
+        new TimeSpan(17,  0, 0),  // 7 пара  17:00
+        new TimeSpan(18, 10, 0),  // 8 пара  18:10
+    };
 
+    // Повертає номер пари за найближчим стартом (із невеликою толерантністю)
+    private static int GetPairNumber(DateTime lessonStart)
+    {
+        var t = lessonStart.TimeOfDay;
+
+        // якщо хочеш жорстке співпадіння без толерантності — просто шукай індекс рівного часу
+        // тут — шукаємо найближчий слот
+        int bestIdx = 0;
+        double bestDiff = double.MaxValue;
+
+        for (int i = 0; i < PairStarts.Length; i++)
+        {
+            var diff = Math.Abs((t - PairStarts[i]).TotalMinutes);
+            if (diff < bestDiff)
+            {
+                bestDiff = diff;
+                bestIdx = i;
+            }
+        }
+
+        return bestIdx + 1; // нумерація з 1
+    }
+}
+<h2 class="mb-4">Розклад</h2>
+<p class="text-muted">@Model.SelectedDate.ToString("dddd, dd MMMM yyyy", ukCulture)</p>
 <div class="d-flex justify-content-between align-items-center mb-3">
     @if (isAdmin)
     {
         <form method="get" class="d-flex align-items-center">
             <select name="SelectedGroupId" class="form-select me-2" onchange="this.form.submit()">
-                @foreach (var group in Model.AllGroups)
+                @foreach (var group in Model.AllGroups.OrderBy(g => g.Name))
                 {
                     <option value="@group.Id" selected="@(group.Id == Model.SelectedGroupId)">@group.Name</option>
                 }
             </select>
             <input type="hidden" name="SelectedDate" value="@Model.SelectedDate.ToString("yyyy-MM-dd")" />
         </form>
-    }
-
-    @if (isAdmin)
-    {
-        <button class="btn btn-dark" data-bs-toggle="modal" data-bs-target="#addLessonModal">
-            ➕ Додати заняття до розкладу
+        <button class="btn btn-dark" data-bs-toggle="modal" data-bs-target="#addLessonModal">➕ Додати заняття до розкладу</button>
+        <!-- Кнопка-триггер модалки експорту -->
+        <button class="btn btn-outline-dark mt-3" data-bs-toggle="modal" data-bs-target="#exportHoursModal">
+            ⬇️ Витягнути години
         </button>
     }
 </div>
-<a class="btn btn-outline-dark" href="?SelectedGroupId=@Model.SelectedGroupId&SelectedDate=@DateTime.Today.ToString("yyyy-MM-dd")">
-    📅 Поточний тиждень
-</a>
-
+<a class="btn btn-outline-dark" href="?SelectedGroupId=@Model.SelectedGroupId&SelectedDate=@DateTime.Today.ToString("yyyy-MM-dd")">📅 Поточний тиждень</a>
 <div class="d-flex justify-content-between mb-3">
     <div>
-        <a class="btn btn-outline-secondary" href="?SelectedGroupId=@Model.SelectedGroupId&SelectedDate=@Model.SelectedDate.AddDays(-7).ToString("yyyy-MM-dd")">
-            ◀️ Попередній тиждень
-        </a>
-        <a class="btn btn-outline-secondary" href="?SelectedGroupId=@Model.SelectedGroupId&SelectedDate=@Model.SelectedDate.AddDays(7).ToString("yyyy-MM-dd")">
-            ▶️ Наступний тиждень
-        </a>
+        <a class="btn btn-outline-secondary" href="?SelectedGroupId=@Model.SelectedGroupId&SelectedDate=@Model.SelectedDate.AddDays(-7).ToString("yyyy-MM-dd")">◀️ Попередній тиждень</a>
+        <a class="btn btn-outline-secondary" href="?SelectedGroupId=@Model.SelectedGroupId&SelectedDate=@Model.SelectedDate.AddDays(7).ToString("yyyy-MM-dd")">▶️ Наступний тиждень</a>
     </div>
 </div>
-
 <div class="d-flex gap-2 mb-4">
     @foreach (var day in Model.WeekDays)
     {
-        <a class="btn @(day == Model.SelectedDate ? "btn-dark" : "btn-outline-secondary")"
-           href="?SelectedGroupId=@Model.SelectedGroupId&SelectedDate=@day.ToString("yyyy-MM-dd")">
-            @day.ToString("ddd dd")
-        </a>
+        <a class="btn @(day == Model.SelectedDate ? "btn-dark" : "btn-outline-secondary")" href="?SelectedGroupId=@Model.SelectedGroupId&SelectedDate=@day.ToString("yyyy-MM-dd")">@day.ToString("ddd dd")</a>
     }
 </div>
-
 <table class="table table-bordered table-hover align-middle">
     <thead class="table-light">
         <tr>
@@ -73,81 +93,53 @@
             <th>Тема</th>
             <th>Домашнє завдання</th>
             <th>Викладач</th>
-            @if (isTeacher)
-            {
-                <th></th>
-            }
+            @if (isTeacher) { <th></th> }
         </tr>
     </thead>
     <tbody>
-        @{
-            int pairIndex = 1;
-        }
+
         @foreach (var lesson in Model.DayLessons.OrderBy(l => l.StartTime))
         {
             var start = lesson.StartTime;
             var end = start.Add(TimeSpan.FromMinutes(90));
+
+            bool currentTeacherIsAdmin = isTeacher && Model.CurrentTeacher?.IsAdmin == true;
+            bool isTodayLesson = lesson.StartTime.Date == DateTime.Today;
+            bool topicOrHwEmpty = string.IsNullOrWhiteSpace(lesson.Topic) || string.IsNullOrWhiteSpace(lesson.Homework);
             <tr>
-                <td>@pairIndex</td>
+                <td>@GetPairNumber(lesson.StartTime)</td>
                 <td>@start.ToString("HH:mm") - @end.ToString("HH:mm")</td>
                 <td>@lesson.Name</td>
                 <td>@lesson.Topic</td>
                 <td>@lesson.Homework</td>
                 <td>@Model._teacherNameCache.GetValueOrDefault(lesson.TeacherId, "—")</td>
-                @{
-                    // Получаем значение IsAdmin для текущего пользователя
-                    bool currentTeacherIsAdmin = false;
-                    if (isTeacher && Model.CurrentTeacher != null)
-                    {
-                        currentTeacherIsAdmin = Model.CurrentTeacher.IsAdmin;
-                    }
-
-                    bool isTodayLesson = lesson.StartTime.Date == DateTime.Today;
-                    bool topicOrHwEmpty = string.IsNullOrWhiteSpace(lesson.Topic) || string.IsNullOrWhiteSpace(lesson.Homework);
-                }
-
-                @if (isTeacher
-                            && lesson.TeacherId.ToString() == userId
-                            && (
-                            // Если админ-учитель — разрешаем на любых днях, где нет темы/ДЗ
-                            (currentTeacherIsAdmin && topicOrHwEmpty)
-                            // Если обычный учитель — только на сегодня
-                            || (!currentTeacherIsAdmin && isTodayLesson && topicOrHwEmpty)
-                            ))
+                @if (isTeacher && lesson.TeacherId.ToString() == userId &&
+                    ((currentTeacherIsAdmin && topicOrHwEmpty) || (!currentTeacherIsAdmin && isTodayLesson && topicOrHwEmpty)))
                 {
                     <td>
-                        <button class="btn btn-sm btn-outline-primary"
-                                data-bs-toggle="modal"
-                                data-bs-target="#editLessonModal"
-                                data-lesson-id="@lesson.Id"
-                                data-lesson-topic="@lesson.Topic"
-                                data-lesson-homework="@lesson.Homework"
-                                data-lesson-group="@lesson.GroupId"
-                                data-lesson-date="@lesson.StartTime.ToString("yyyy-MM-ddTHH:mm")">
-                            📝 Додати тему / ДЗ
-                        </button>
+                        <button class="btn btn-sm btn-outline-primary" data-bs-toggle="modal" data-bs-target="#editLessonModal"
+                                data-lesson-id="@lesson.Id" data-lesson-topic="@lesson.Topic"
+                                data-lesson-homework="@lesson.Homework" data-lesson-group="@lesson.GroupId"
+                                data-lesson-date="@lesson.StartTime.ToString("yyyy-MM-ddTHH:mm")">📝 Додати тему / ДЗ</button>
                     </td>
                 }
-                else if (isTeacher)
-                {
-                    <td></td>
-                }
+                else if (isTeacher) { <td></td> }
             </tr>
-            pairIndex++;
         }
     </tbody>
 </table>
-<!-- 🧩 Модальне вікно для створення -->
-<div class="modal fade" id="addLessonModal" tabindex="-1" aria-labelledby="lessonModalLabel" aria-hidden="true">
+<!-- Модалка додавання заняття -->
+<div class="modal fade" id="addLessonModal" tabindex="-1">
     <div class="modal-dialog">
         <div class="modal-content">
             <form method="post">
                 @Html.AntiForgeryToken()
+                <input type="hidden" name="handler" value="AddLesson" />
+
                 <div class="modal-header">
                     <h5 class="modal-title">➕ Додати заняття до розкладу</h5>
                     <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
                 </div>
-
                 <div class="modal-body">
                     <input type="hidden" name="InputLesson.Id" />
                     <input type="hidden" name="InputLesson.GroupId" value="@Model.SelectedGroupId" />
@@ -155,7 +147,6 @@
                         <label class="form-label">Дата і час початку</label>
                         <input id="lessonStartTime" name="InputLesson.StartTime" type="datetime-local" class="form-control" required value="@selectedDateTime.ToString("yyyy-MM-ddTHH:mm")" />
                     </div>
-
                     @if (isAdmin)
                     {
                         <div class="mb-3">
@@ -179,7 +170,7 @@
                                 <option>Культурологія</option>
                                 <option>Теоретична механіка</option>
                                 <option>ФІЗИКА</option>
-                                <option>Історія України</option>
+                                <option>Історія: Украiна і світ</option>
                             </select>
                         </div>
                         <div class="mb-3">
@@ -193,18 +184,15 @@
                             </select>
                         </div>
                     }
-
                     <div class="mb-3">
                         <label class="form-label">Тема заняття</label>
                         <input name="InputLesson.Topic" class="form-control" />
                     </div>
-
                     <div class="mb-3">
                         <label class="form-label">Домашнє завдання</label>
                         <textarea name="InputLesson.Homework" class="form-control"></textarea>
                     </div>
                 </div>
-
                 <div class="modal-footer">
                     <button type="submit" class="btn btn-dark">Зберегти</button>
                     <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Скасувати</button>
@@ -213,25 +201,36 @@
         </div>
     </div>
 </div>
-<div class="modal fade" id="importLessonModal" tabindex="-1" aria-labelledby="importModalLabel" aria-hidden="true">
+<!-- Модалка імпорту -->
+@if (isAdmin)
+{
+    <button class="btn btn-outline-primary mt-3" data-bs-toggle="modal" data-bs-target="#importLessonModal">📥 Імпортувати розклад з Excel</button>
+}
+<div class="modal fade" id="importLessonModal" tabindex="-1">
     <div class="modal-dialog">
         <div class="modal-content">
-            <form method="post" enctype="multipart/form-data" asp-page-handler="ImportLessons">
+            <form method="post" enctype="multipart/form-data">
                 @Html.AntiForgeryToken()
+                <input type="hidden" name="handler" value="ImportLessons" />
 
                 <div class="modal-header">
                     <h5 class="modal-title">📥 Імпортувати розклад з Excel</h5>
                     <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
                 </div>
-
                 <div class="modal-body">
                     <input type="hidden" name="GroupId" value="@Model.SelectedGroupId" />
                     <div class="mb-3">
                         <label class="form-label">Оберіть Excel-файл розкладу</label>
                         <input type="file" name="File" class="form-control" accept=".xlsx" required />
                     </div>
+                    <div class="mb-3">
+                        <label for="isNumeratorSelect" class="form-label">Тип тижня для імпорту</label>
+                        <select id="isNumeratorSelect" name="IsNumerator" class="form-select" required>
+                            <option value="true" selected>Чисельник</option>
+                            <option value="false">Знаменник</option>
+                        </select>
+                    </div>
                 </div>
-
                 <div class="modal-footer">
                     <button type="submit" class="btn btn-success">📤 Імпортувати</button>
                     <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Скасувати</button>
@@ -240,20 +239,14 @@
         </div>
     </div>
 </div>
-
-<!-- Кнопка для виклику модалки -->
-@if (isAdmin)
-{
-    <button class="btn btn-outline-primary mt-3" data-bs-toggle="modal" data-bs-target="#importLessonModal">
-        📥 Імпортувати розклад з Excel
-    </button>
-}
-<!-- 🧩 Модальне вікно редагування теми / ДЗ -->
-<div class="modal fade" id="editLessonModal" tabindex="-1" aria-labelledby="editLessonModalLabel" aria-hidden="true">
+<!-- Модалка редагування -->
+<div class="modal fade" id="editLessonModal" tabindex="-1">
     <div class="modal-dialog">
         <div class="modal-content">
             <form method="post">
                 @Html.AntiForgeryToken()
+                <input type="hidden" name="handler" value="EditLesson" />
+
                 <div class="modal-header">
                     <h5 class="modal-title">📝 Додати тему / ДЗ</h5>
                     <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
@@ -262,7 +255,6 @@
                     <input type="hidden" name="InputLesson.Id" />
                     <input type="hidden" name="InputLesson.GroupId" />
                     <input type="hidden" name="InputLesson.StartTime" />
-
                     <div class="mb-3">
                         <label class="form-label">Тема заняття</label>
                         <input name="InputLesson.Topic" class="form-control" />
@@ -270,6 +262,10 @@
                     <div class="mb-3">
                         <label class="form-label">Домашнє завдання</label>
                         <textarea name="InputLesson.Homework" class="form-control"></textarea>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Кількість годин</label>
+                        <textarea name="InputLesson.Clocks" class="form-control"></textarea>
                     </div>
                 </div>
                 <div class="modal-footer">
@@ -280,28 +276,104 @@
         </div>
     </div>
 </div>
+<div class="modal fade" id="exportHoursModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content border-0 rounded-4 shadow-lg">
+            <form method="post">
+                @Html.AntiForgeryToken()
+                <input type="hidden" name="handler" value="Export" />
+                <div class="modal-header border-0 pb-0">
+                    <h5 class="modal-title fw-semibold">Витягнути години</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+
+                <div class="modal-body">
+                    @* Викладач: для Teacher скрыто, для Admin — селект *@
+                    @if (Model.Role == "Admin")
+                    {
+                        <div class="mb-3">
+                            <label class="form-label">Викладач</label>
+                            <select name="ExportFilters.TeacherId" class="form-select" required>
+                                <option value="">Оберіть викладача</option>
+                                @foreach (var t in Model.Teachers.OrderBy(x => x.FullName))
+                                {
+                                    <option value="@t.Id">@t.FullName</option>
+                                }
+                            </select>
+                        </div>
+                    }
+                    else if (Model.Role == "Teacher")
+                    {
+                        <input type="hidden" name="ExportFilters.TeacherId" value="@Model.CurrentTeacher?.Id" />
+                    }
+
+                    <div class="mb-3">
+                        <label class="form-label">Предмет</label>
+                        <select name="ExportFilters.SubjectName" class="form-select">
+                            <option value="">Оберіть предмет</option>
+                            <option>Фізичне виховання</option>
+                            <option>Основи екології</option>
+                            <option>Основи правознавства</option>
+                            <option>Вища математика</option>
+                            <option>Опір матеріалів</option>
+                            <option>Безпека життєдіяльності</option>
+                            <option>ХІМІЯ</option>
+                            <option>Інженерне креслення</option>
+                            <option>Будівельне матеріалознавство</option>
+                            <option>Інженерна геодезія</option>
+                            <option>Електротехніка в будівництві</option>
+                            <option>Будівельні конструкції</option>
+                            <option>Фізичне виховання (заняття в секціях)***</option>
+                            <option>Основи економічної теорії</option>
+                            <option>Культурологія</option>
+                            <option>Теоретична механіка</option>
+                            <option>ФІЗИКА</option>
+                            <option>Історія: Украiна і світ</option>
+                        </select>
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label">Група</label>
+                        <select name="ExportFilters.GroupId" class="form-select">
+                            <option value="">Оберіть групу</option>
+                            @foreach (var g in Model.AllGroups.OrderBy(x => x.Name))
+                            {
+                                <option value="@g.Id" @(g.Id == Model.SelectedGroupId ? "selected" : "")>@g.Name</option>
+                            }
+                        </select>
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label">Дата початку</label>
+                        <input type="date" name="ExportFilters.StartDate" class="form-control" />
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label">Дата закінчення</label>
+                        <input type="date" name="ExportFilters.EndDate" class="form-control" />
+                    </div>
+                </div>
+
+                <div class="modal-footer border-0 pt-0">
+                    <button type="submit" class="btn btn-dark w-100 py-2">Витягнути файл</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
 @section Scripts {
     <script>
         document.addEventListener("DOMContentLoaded", () => {
             const editModal = document.getElementById('editLessonModal');
             if (!editModal) return;
-
             editModal.addEventListener('show.bs.modal', function (event) {
                 const button = event.relatedTarget;
                 if (!button) return;
-
-                const id = button.getAttribute('data-lesson-id');
-                const topic = button.getAttribute('data-lesson-topic') || "";
-                const homework = button.getAttribute('data-lesson-homework') || "";
-                const group = button.getAttribute('data-lesson-group');
-                const date = button.getAttribute('data-lesson-date');
-
-                // 👇 корректный выбор элементов внутри модалки
-                editModal.querySelector('input[name="InputLesson.Id"]').value = id;
-                editModal.querySelector('input[name="InputLesson.GroupId"]').value = group;
-                editModal.querySelector('input[name="InputLesson.StartTime"]').value = date;
-                editModal.querySelector('input[name="InputLesson.Topic"]').value = topic;
-                editModal.querySelector('textarea[name="InputLesson.Homework"]').value = homework;
+                editModal.querySelector('input[name="InputLesson.Id"]').value = button.getAttribute('data-lesson-id');
+                editModal.querySelector('input[name="InputLesson.GroupId"]').value = button.getAttribute('data-lesson-group');
+                editModal.querySelector('input[name="InputLesson.StartTime"]').value = button.getAttribute('data-lesson-date');
+                editModal.querySelector('input[name="InputLesson.Topic"]').value = button.getAttribute('data-lesson-topic') || "";
+                editModal.querySelector('textarea[name="InputLesson.Homework"]').value = button.getAttribute('data-lesson-homework') || "";
             });
         });
     </script>

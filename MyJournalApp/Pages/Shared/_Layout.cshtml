@@ -1,4 +1,61 @@
-﻿<!DOCTYPE html>
+﻿@using System.Net
+@using System.Net.Http
+@using System.Net.Http.Headers
+@using System.Security.Claims
+@using System.Text.Json
+@inject IHttpClientFactory HttpClientFactory
+@inject Microsoft.AspNetCore.Http.IHttpContextAccessor HttpContextAccessor
+
+@functions {
+    // Модель ответа /api/Auth/me
+    private sealed class MeDto
+    {
+        public Guid Id { get; set; }
+        public string? Email { get; set; }
+        public string? Role { get; set; }
+        public bool MustChangePassword { get; set; }
+    }
+}
+
+@{
+    // ---- Серверная проверка пользователя через /api/Auth/me ----
+    var token = HttpContextAccessor.HttpContext?.Request.Cookies["cookies"];
+    var isAuthenticated = User?.Identity?.IsAuthenticated == true;
+    bool mustChangePassword = false;
+
+    if (isAuthenticated && !string.IsNullOrWhiteSpace(token))
+    {
+        try
+        {
+            var client = HttpClientFactory.CreateClient("ApiClient"); // базовый адрес задан в Program.cs
+            using var req = new HttpRequestMessage(HttpMethod.Get, "api/Auth/me");
+            req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+
+            using var res = await client.SendAsync(req);
+            if (res.StatusCode == HttpStatusCode.Unauthorized)
+            {
+                isAuthenticated = false;
+            }
+            else if (res.IsSuccessStatusCode)
+            {
+                await using var s = await res.Content.ReadAsStreamAsync();
+                var me = await JsonSerializer.DeserializeAsync<MeDto>(s, new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+                mustChangePassword = me?.MustChangePassword ?? false;
+            }
+            // Иные статусы — оставляем mustChangePassword = false (мягкая деградация)
+        }
+        catch
+        {
+            // Ошибки сети/JSON — мягкая деградация
+        }
+    }
+
+    var isAdmin = User.IsInRole("Admin");
+    var isStudent = User.IsInRole("Student");
+    var roleName = User.FindFirst(ClaimTypes.Role)?.Value;
+}
+
+<!DOCTYPE html>
 <html lang="uk">
 <head>
     <meta charset="utf-8" />
@@ -27,8 +84,7 @@
                 font-weight: 500;
             }
 
-                .sidebar .nav-link:hover,
-                .sidebar .nav-link.active {
+                .sidebar .nav-link:hover, .sidebar .nav-link.active {
                     background-color: #f1f1f1;
                     border-radius: 6px;
                 }
@@ -65,26 +121,59 @@
 <body>
     <div class="sidebar">
         <h5 class="mb-4">Навігація</h5>
-        <ul class="nav flex-column">
-            <li class="nav-item"><a class="nav-link" href="/">🏠 Головна</a></li>
-            <li class="nav-item"><a class="nav-link" href="/Journal">📘 Журнал</a></li>
-            <li class="nav-item"><a class="nav-link" href="/Calendar">📅 Календар</a></li>
-            <li class="nav-item"><a class="nav-link" href="/Students">👥 Студенти</a></li>
-            <li class="nav-item"><a class="nav-link" href="/Groups">🏫 Групи</a></li>
 
-            <li class="nav-item"><a class="nav-link" href="/Profile">👤 Профіль</a></li> <!-- 🔥 Додано -->
-            @if (User.IsInRole("Admin"))
-            {
-                <li class="nav-item"><a class="nav-link" href="/Users">🛠 Користувачі</a></li>
-            }
-
-            <li class="nav-item mt-2">
-                <form method="post" action="/api/Auth/logout">
-                    <button type="submit" class="btn btn-link nav-link text-danger p-0">🚪 Вихід</button>
-                </form>
-            </li>
-        </ul>
-
+        @if (!isAuthenticated)
+        {
+            <!-- Неавторизованный: минимальная навигация -->
+            <ul class="nav flex-column">
+                <li class="nav-item"><a class="nav-link" href="/Account/Login">🔑 Вхід</a></li>
+            </ul>
+        }
+        else if (mustChangePassword)
+        {
+            <!-- Ограниченный доступ до смены пароля -->
+            <div class="alert alert-warning p-2 mb-2" role="alert" style="font-size:.9rem;">
+                Потрібно змінити пароль, щоб отримати доступ до розділів.
+            </div>
+            <ul class="nav flex-column">
+                <li class="nav-item"><a class="nav-link" href="/Profile">👤 Профіль</a></li>
+                <li class="nav-item mt-2">
+                    <!-- Рекомендуется иметь страницу /Account/Logout, которая сделает POST к api/Auth/logout и редиректит на /Account/Login -->
+                    <a class="nav-link text-danger" href="/Account/Logout">🚪 Вихід</a>
+                </li>
+            </ul>
+        }
+        else
+        {
+            <!-- Полный сайдбар -->
+            <ul class="nav flex-column">
+                <li class="nav-item"><a class="nav-link" href="/">🏠 Головна</a></li>
+                <li class="nav-item"><a class="nav-link" href="/Journal">📘 Журнал</a></li>
+                <li class="nav-item"><a class="nav-link" href="/Calendar">📅 Календар</a></li>
+                @if (!isStudent)
+                {
+                    <li class="nav-item"><a class="nav-link" href="/Students">👥 Студенти</a></li>
+                    <li class="nav-item"><a class="nav-link" href="/Groups">🏫 Групи</a></li>
+                }
+                <li class="nav-item"><a class="nav-link" href="/Profile">👤 Профіль</a></li>
+                @if (isAdmin)
+                {
+                    <li class="nav-item"><a class="nav-link" href="/Users">🛠 Користувачі</a></li>
+                }
+                <li class="nav-item mt-2">
+                    <form id="logoutForm" method="post" action="/api/Auth/logout">
+                        <button type="submit" class="btn btn-link nav-link text-danger p-0">🚪 Вихід</button>
+                    </form>
+                    <script>
+                        document.getElementById('logoutForm').addEventListener('submit', async e => {
+                            e.preventDefault();
+                            await fetch('/api/Auth/logout', { method: 'POST', credentials: 'same-origin' });
+                            window.location.href = '/Account/Login';
+                        });
+                    </script>
+                </li>
+            </ul>
+        }
     </div>
 
     <div class="main-content">
@@ -92,7 +181,7 @@
             <h5>Електронний журнал</h5>
             <div>
                 <span>Користувач: <strong>@User.Identity?.Name</strong></span><br />
-                <small>Роль: @User.FindFirst(System.Security.Claims.ClaimTypes.Role)?.Value</small>
+                <small>Роль: @roleName</small>
             </div>
         </div>
 
@@ -101,11 +190,8 @@
         </main>
     </div>
 
-    <footer>
-        &copy; 2025 - Запорізький будівельний фаховий коледж
-    </footer>
+    <footer>&copy; 2025 - Запорізький будівельний фаховий коледж</footer>
 
     @RenderSection("Scripts", required: false)
 </body>
 </html>
-

@@ -13,7 +13,7 @@ public class JournalController : ControllerBase
         _journalRepo = journalRepo;
     }
 
-    [Authorize(Roles = "Admin")]
+    [Authorize]
     [HttpGet("all")]
     public async Task<IActionResult> GetAll()
     {
@@ -21,7 +21,7 @@ public class JournalController : ControllerBase
         return Ok(journals);
     }
 
-    [Authorize(Roles = "Teacher")]
+    [Authorize]
     [HttpGet("my")]
     public async Task<IActionResult> GetMy()
     {
@@ -43,7 +43,7 @@ public class JournalController : ControllerBase
         return journal is null ? NotFound() : Ok(journal);
     }
 
-    [Authorize(Roles = "Admin,Teacher")]
+    [Authorize]
     [HttpPost]
     public async Task<IActionResult> Create([FromBody] JournalEntry dto)
     {
@@ -53,7 +53,7 @@ public class JournalController : ControllerBase
         return Ok(dto);
     }
 
-    [Authorize(Roles = "Admin,Teacher")]
+    [Authorize]
     [HttpPut("{id}")]
     public async Task<IActionResult> Update(Guid id, [FromBody] JournalEntry dto)
     {
@@ -71,8 +71,8 @@ public class JournalController : ControllerBase
         return Ok(existing);
     }
 
-    [Authorize(Roles = "Admin")]
-    [HttpDelete("{id}")]
+    [Authorize]
+    [HttpPost("{id}")]
     public async Task<IActionResult> Delete(Guid id)
     {
         var existing = await _journalRepo.GetByIdAsync(id);
@@ -80,7 +80,7 @@ public class JournalController : ControllerBase
 
         _journalRepo.Delete(existing);
         await _journalRepo.SaveChangesAsync();
-        return Ok("Deleted");
+        return NoContent(); // HTTP 204, тело пустое
     }
     public class JournalEntryDto
     {

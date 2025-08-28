@@ -12,8 +12,8 @@ using MyJournalApp.Data;
 namespace MyJournalApp.Migrations
 {
     [DbContext(typeof(JournalDbContext))]
-    [Migration("20250807210802_create_local")]
-    partial class create_local
+    [Migration("20250828202401_update_journal_max_value")]
+    partial class update_journal_max_value
     {
         /// <inheritdoc />
         protected override void BuildTargetModel(ModelBuilder modelBuilder)
@@ -69,6 +69,9 @@ namespace MyJournalApp.Migrations
                     b.Property<DateTime>("Created")
                         .HasColumnType("datetime2");
 
+                    b.Property<bool?>("IsPresent")
+                        .HasColumnType("bit");
+
                     b.Property<Guid>("JournalEntryId")
                         .HasColumnType("uniqueidentifier");
 
@@ -78,7 +81,7 @@ namespace MyJournalApp.Migrations
                     b.Property<Guid>("TeacherId")
                         .HasColumnType("uniqueidentifier");
 
-                    b.Property<int>("Value")
+                    b.Property<int?>("Value")
                         .HasColumnType("int");
 
                     b.HasKey("Id");
@@ -125,6 +128,13 @@ namespace MyJournalApp.Migrations
                     b.Property<Guid>("GroupId")
                         .HasColumnType("uniqueidentifier");
 
+                    b.Property<int>("MaxValue")
+                        .HasColumnType("int");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasColumnType("nvarchar(max)");
+
                     b.Property<string>("Subject")
                         .IsRequired()
                         .HasColumnType("nvarchar(max)");
@@ -143,6 +153,9 @@ namespace MyJournalApp.Migrations
                     b.Property<Guid>("Id")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uniqueidentifier");
+
+                    b.Property<int?>("Clocks")
+                        .HasColumnType("int");
 
                     b.Property<Guid>("GroupId")
                         .HasColumnType("uniqueidentifier");
@@ -245,6 +258,9 @@ namespace MyJournalApp.Migrations
                     b.Property<string>("FullName")
                         .IsRequired()
                         .HasColumnType("nvarchar(max)");
+
+                    b.Property<bool>("MustChangePassword")
+                        .HasColumnType("bit");
 
                     b.Property<string>("PasswordHash")
                         .IsRequired()

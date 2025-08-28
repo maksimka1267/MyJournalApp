@@ -12,7 +12,7 @@
 <h2 class="mb-4">Студенти</h2>
 
 <div class="row row-cols-1 row-cols-sm-2 row-cols-md-3 row-cols-lg-4 g-3 mb-4">
-    @foreach (var group in Model.GroupSummaries)
+    @foreach (var group in Model.GroupSummaries.OrderBy(g=>g.Name))
     {
         <div class="col">
             <div class="card h-100 p-3">
@@ -31,7 +31,7 @@
         </tr>
     </thead>
     <tbody>
-        @foreach (var student in Model.Students)
+        @foreach (var student in Model.Students.OrderBy(g=>g.FullName))
         {
             <tr>
                 <td>@student.FullName</td>

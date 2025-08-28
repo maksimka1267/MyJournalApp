@@ -16,6 +16,12 @@ public class GroupRepository : Repository<Group>, IGroupRepository
     {
         return await _context.Groups.AnyAsync(g => g.Id == groupId);
     }
-
+    public async Task<string?> GetNameByIdAsync(Guid groupId)
+    {
+        return await _context.Groups
+            .Where(g => g.Id == groupId)
+            .Select(g => g.Name)
+            .FirstOrDefaultAsync();
+    }
 
 }
