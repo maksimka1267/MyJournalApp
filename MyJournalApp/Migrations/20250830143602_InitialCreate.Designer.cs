@@ -12,8 +12,8 @@ using MyJournalApp.Data;
 namespace MyJournalApp.Migrations
 {
     [DbContext(typeof(JournalDbContext))]
-    [Migration("20250828202401_update_journal_max_value")]
-    partial class update_journal_max_value
+    [Migration("20250830143602_InitialCreate")]
+    partial class InitialCreate
     {
         /// <inheritdoc />
         protected override void BuildTargetModel(ModelBuilder modelBuilder)
@@ -54,7 +54,7 @@ namespace MyJournalApp.Migrations
 
                     b.HasKey("Id");
 
-                    b.ToTable("AcademicEvents");
+                    b.ToTable("AcademicEvents", "dbo");
                 });
 
             modelBuilder.Entity("Grade", b =>
@@ -132,10 +132,6 @@ namespace MyJournalApp.Migrations
                         .HasColumnType("int");
 
                     b.Property<string>("Name")
-                        .IsRequired()
-                        .HasColumnType("nvarchar(max)");
-
-                    b.Property<string>("Subject")
                         .IsRequired()
                         .HasColumnType("nvarchar(max)");
 

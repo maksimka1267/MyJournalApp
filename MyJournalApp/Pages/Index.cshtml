@@ -12,44 +12,33 @@
     var ukCulture = new CultureInfo("uk-UA");
 }
 @functions {
-    // Старт кожної пари (налаштуй під свій коледж)
-    // Ти писав: 1-я = 08:00, 2-я = 10:10, 3-я = 11:20, «і так далі».
-    // Я додав приклад на 8 пар — відредагуй за потреби.
+    // РЕАЛЬНІ старти пар (як у твоїй таблиці)
     private static readonly TimeSpan[] PairStarts = new[]
     {
-        new TimeSpan(8,  0, 0),   // 1 пара  08:00
-        new TimeSpan(10, 10, 0),  // 2 пара  10:10
-        new TimeSpan(11, 20, 0),  // 3 пара  11:20
-        new TimeSpan(13, 30, 0),  // 4 пара  13:30
-        new TimeSpan(14, 40, 0),  // 5 пара  14:40
-        new TimeSpan(15, 50, 0),  // 6 пара  15:50
-        new TimeSpan(17,  0, 0),  // 7 пара  17:00
-        new TimeSpan(18, 10, 0),  // 8 пара  18:10
+        new TimeSpan(9,  0, 0),  // 1: 09:00
+        new TimeSpan(10, 10, 0), // 2: 10:10
+        new TimeSpan(11, 20, 0), // 3: 11:20
+        new TimeSpan(12, 30, 0), // 4: 12:30
+        new TimeSpan(13, 40, 0), // 5: 13:40
+        new TimeSpan(14, 50, 0), // 6: 14:50  (за потреби скоригуй)
+        new TimeSpan(16,  0, 0), // 7: 16:00
+        new TimeSpan(17, 10, 0), // 8: 17:10
     };
 
-    // Повертає номер пари за найближчим стартом (із невеликою толерантністю)
+    // Нумерація по серединах між стартами
     private static int GetPairNumber(DateTime lessonStart)
     {
         var t = lessonStart.TimeOfDay;
 
-        // якщо хочеш жорстке співпадіння без толерантності — просто шукай індекс рівного часу
-        // тут — шукаємо найближчий слот
-        int bestIdx = 0;
-        double bestDiff = double.MaxValue;
-
-        for (int i = 0; i < PairStarts.Length; i++)
+        for (int i = 0; i < PairStarts.Length - 1; i++)
         {
-            var diff = Math.Abs((t - PairStarts[i]).TotalMinutes);
-            if (diff < bestDiff)
-            {
-                bestDiff = diff;
-                bestIdx = i;
-            }
+            var mid = new TimeSpan((PairStarts[i].Ticks + PairStarts[i + 1].Ticks) / 2);
+            if (t < mid) return i + 1; // пари з 1
         }
-
-        return bestIdx + 1; // нумерація з 1
+        return PairStarts.Length;
     }
 }
+
 <h2 class="mb-4">Розклад</h2>
 <p class="text-muted">@Model.SelectedDate.ToString("dddd, dd MMMM yyyy", ukCulture)</p>
 <div class="d-flex justify-content-between align-items-center mb-3">
@@ -101,7 +90,7 @@
         @foreach (var lesson in Model.DayLessons.OrderBy(l => l.StartTime))
         {
             var start = lesson.StartTime;
-            var end = start.Add(TimeSpan.FromMinutes(90));
+            var end = start.Add(TimeSpan.FromMinutes(60));
 
             bool currentTeacherIsAdmin = isTeacher && Model.CurrentTeacher?.IsAdmin == true;
             bool isTodayLesson = lesson.StartTime.Date == DateTime.Today;
@@ -109,21 +98,41 @@
             <tr>
                 <td>@GetPairNumber(lesson.StartTime)</td>
                 <td>@start.ToString("HH:mm") - @end.ToString("HH:mm")</td>
-                <td>@lesson.Name</td>
+                <td>
+                    @{
+                        if (isTeacher)
+                        {
+                            var gName = Model.AllGroups.FirstOrDefault(g => g.Id == lesson.GroupId)?.Name ?? "";
+                            if (!string.IsNullOrWhiteSpace(gName))
+                            {
+                                @($"{lesson.Name} ({gName})")
+                            }
+                            else
+                            {
+                                @lesson.Name
+                            }
+                        }
+                        else
+                        {
+                            @lesson.Name
+                        }
+                    }
+                </td>
+
                 <td>@lesson.Topic</td>
                 <td>@lesson.Homework</td>
                 <td>@Model._teacherNameCache.GetValueOrDefault(lesson.TeacherId, "—")</td>
-                @if (isTeacher && lesson.TeacherId.ToString() == userId &&
-                    ((currentTeacherIsAdmin && topicOrHwEmpty) || (!currentTeacherIsAdmin && isTodayLesson && topicOrHwEmpty)))
+                @if (isTeacher && lesson.TeacherId.ToString() == userId)
                 {
                     <td>
                         <button class="btn btn-sm btn-outline-primary" data-bs-toggle="modal" data-bs-target="#editLessonModal"
                                 data-lesson-id="@lesson.Id" data-lesson-topic="@lesson.Topic"
                                 data-lesson-homework="@lesson.Homework" data-lesson-group="@lesson.GroupId"
-                                data-lesson-date="@lesson.StartTime.ToString("yyyy-MM-ddTHH:mm")">📝 Додати тему / ДЗ</button>
+                                data-lesson-date="@lesson.StartTime.ToString("yyyy-MM-ddTHH:mm")">
+                            📝 Редагувати тему / ДЗ
+                        </button>
                     </td>
                 }
-                else if (isTeacher) { <td></td> }
             </tr>
         }
     </tbody>

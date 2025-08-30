@@ -70,11 +70,24 @@ public class AuthController : ControllerBase
         switch (dto.Role)
         {
             case "Student":
+                if (!dto.GroupId.HasValue)
+                    return BadRequest("GroupId is required for student role");
                 await _studentRepository.AddAsync(new Student
                 {
                     Id = userId,
-                    GroupId = dto.GroupId!.Value
+                    GroupId = dto.GroupId.Value
                 });
+
+                var group = await _groupRepository.GetByIdAsync(dto.GroupId.Value);
+                if (group == null)
+                    return BadRequest("Group not found");
+
+                // вот это — ключевой момент
+                group.StudentIds ??= new List<Guid>();
+                if (!group.StudentIds.Contains(userId))
+                    group.StudentIds.Add(userId);
+
+                await _groupRepository.Update(group);
                 break;
 
             case "Teacher":
@@ -176,80 +189,168 @@ public class AuthController : ControllerBase
 
         using var stream = new MemoryStream();
         await dto.File.CopyToAsync(stream);
+        stream.Position = 0; // 🔧 важно для чтения
         using var workbook = new XLWorkbook(stream);
-        var worksheet = workbook.Worksheets.FirstOrDefault();
-        if (worksheet == null) return BadRequest("No worksheet found");
+        var ws = workbook.Worksheets.FirstOrDefault();
+        if (ws == null) return BadRequest("No worksheet found");
 
-        // --- ИЗМЕНЕНИЕ 1: Получаем группу ОДИН РАЗ перед циклом ---
-        Group group = null;
-        if (dto.Role == "Student")
-        {
-            group = await _groupRepository.GetByIdAsync(dto.GroupId.Value);
-            if (group == null)
-            {
-                return BadRequest("Group not found");
-            }
-            // Инициализируем список, если он пуст
+        var allUsers = await _userRepository.GetAllAsync();
+        var byEmail = allUsers
+            .Where(u => !string.IsNullOrWhiteSpace(u.Email))
+            .GroupBy(u => u.Email!.Trim().ToLowerInvariant())
+            .ToDictionary(g => g.Key, g => g.First());
+
+        var byName = allUsers
+            .Where(u => !string.IsNullOrWhiteSpace(u.FullName))
+            .GroupBy(u => u.FullName!.Trim().ToLowerInvariant())
+            .ToDictionary(g => g.Key, g => g.First());
+
+        var allStudents = (await _studentRepository.GetAllAsync()).ToDictionary(s => s.Id);
+        var allTeachers = (await _teacherRepository.GetAllAsync()).ToDictionary(t => t.Id);
+
+        var groupsById = (await _groupRepository.GetAllAsync()).ToDictionary(g => g.Id);
+        foreach (var group in groupsById.Values)
             group.StudentIds ??= new List<Guid>();
-        }
 
-        foreach (var row in worksheet.RowsUsed().Skip(1))
+        Group? targetGroup = null;
+        if (dto.Role == "Student" && groupsById.TryGetValue(dto.GroupId!.Value, out var foundGroup))
+            targetGroup = foundGroup;
+        else if (dto.Role == "Student")
+            return BadRequest("Target group not found");
+
+        // 🔧 будем знать какие группы нужно явно апдейтнуть/сохранить
+        var touchedGroupIds = new HashSet<Guid>();
+
+        foreach (var row in ws.RowsUsed().Skip(1))
         {
             var fullName = row.Cell(2).GetValue<string>().Trim();
             var email = row.Cell(3).GetValue<string>().Trim();
 
-            if (string.IsNullOrEmpty(fullName) || string.IsNullOrEmpty(email))
+            if (string.IsNullOrWhiteSpace(fullName) && string.IsNullOrWhiteSpace(email))
                 continue;
 
-            if (await _userRepository.GetByEmail(email) != null)
-                continue;
+            User? user = null;
+            if (!string.IsNullOrWhiteSpace(email) && byEmail.TryGetValue(email.ToLowerInvariant(), out var u1))
+                user = u1;
+            else if (!string.IsNullOrWhiteSpace(fullName) && byName.TryGetValue(fullName.ToLowerInvariant(), out var u2))
+                user = u2;
 
-            var id = Guid.NewGuid();
-            var user = new User
+            // --- Новый пользователь ---
+            if (user == null)
             {
-                Id = id,
-                FullName = fullName,
-                Email = email,
-                Role = dto.Role,
-                PasswordHash = _hasher.Generate("test")
-            };
+                user = new User
+                {
+                    Id = Guid.NewGuid(),
+                    FullName = fullName,
+                    Email = email,
+                    Role = dto.Role,
+                    PasswordHash = _hasher.Generate("test")
+                };
+                await _userRepository.AddAsync(user);
 
-            await _userRepository.AddAsync(user);
+                // 🔧 поддерживаем индексы для последующих строк
+                if (!string.IsNullOrWhiteSpace(user.Email))
+                    byEmail[user.Email.Trim().ToLowerInvariant()] = user;
+                if (!string.IsNullOrWhiteSpace(user.FullName))
+                    byName[user.FullName.Trim().ToLowerInvariant()] = user;
 
-            switch (dto.Role)
-            {
-                case "Student":
-                    await _studentRepository.AddAsync(new Student
+                if (dto.Role == "Student")
+                {
+                    var student = new Student { Id = user.Id, GroupId = targetGroup!.Id };
+                    await _studentRepository.AddAsync(student);
+                    allStudents[user.Id] = student;
+
+                    if (!targetGroup!.StudentIds!.Contains(user.Id))
                     {
-                        Id = id,
-                        GroupId = dto.GroupId.Value
-                    });
-                    if (group != null)
-                    {
-                        group.StudentIds.Add(id);
+                        targetGroup.StudentIds.Add(user.Id);
+                        touchedGroupIds.Add(targetGroup.Id); // 🔧 пометили группу
                     }
-                    break;
+                }
+                else if (dto.Role == "Teacher")
+                {
+                    var teacher = new Teacher { Id = user.Id };
+                    await _teacherRepository.AddAsync(teacher);
+                    allTeachers[user.Id] = teacher;
+                }
+            }
+            // --- Обновление существующего пользователя ---
+            else
+            {
+                user.FullName = fullName;
+                user.Email = email;
 
-                case "Teacher":
-                    await _teacherRepository.AddAsync(new Teacher { Id = id });
-                    break;
+                if (dto.Role == "Student")
+                {
+                    allStudents.TryGetValue(user.Id, out var student);
+                    if (student == null)
+                    {
+                        student = new Student { Id = user.Id, GroupId = targetGroup!.Id };
+                        await _studentRepository.AddAsync(student);
+                        allStudents[user.Id] = student;
+                    }
 
-                default:
-                    continue;
+                    if (user.Role == "Teacher" && allTeachers.TryGetValue(user.Id, out var oldTeacher))
+                    {
+                        await _teacherRepository.Delete(oldTeacher);
+                        allTeachers.Remove(user.Id);
+                    }
+
+                    // если был в другой группе — убрать из старой
+                    if (student.GroupId != targetGroup!.Id && groupsById.TryGetValue(student.GroupId, out var oldGroup))
+                    {
+                        if (oldGroup.StudentIds!.Remove(user.Id))
+                            touchedGroupIds.Add(oldGroup.Id); // 🔧 старая группа изменилась
+                    }
+
+                    student.GroupId = targetGroup!.Id;
+
+                    if (!targetGroup.StudentIds!.Contains(user.Id))
+                    {
+                        targetGroup.StudentIds.Add(user.Id);
+                        touchedGroupIds.Add(targetGroup.Id); // 🔧 целевая группа изменилась
+                    }
+
+                    user.Role = "Student";
+                }
+                else if (dto.Role == "Teacher")
+                {
+                    if (allStudents.TryGetValue(user.Id, out var oldStudent))
+                    {
+                        if (groupsById.TryGetValue(oldStudent.GroupId, out var oldGroup))
+                        {
+                            if (oldGroup.StudentIds!.Remove(user.Id))
+                                touchedGroupIds.Add(oldGroup.Id); // 🔧 убрали из старой группы
+                        }
+
+                        await _studentRepository.Delete(oldStudent);
+                        allStudents.Remove(user.Id);
+                    }
+
+                    if (!allTeachers.TryGetValue(user.Id, out var teacher))
+                    {
+                        teacher = new Teacher { Id = user.Id };
+                        await _teacherRepository.AddAsync(teacher);
+                        allTeachers[user.Id] = teacher;
+                    }
+
+                    user.Role = "Teacher";
+                }
+
+                await _userRepository.Update(user);
             }
         }
 
-        // --- ИЗМЕНЕНИЕ 3: Обновляем группу ОДИН РАЗ после цикла ---
-        if (dto.Role == "Student" && group != null)
-        {
-            await _groupRepository.Update(group);
-        }
-
+        // ----- Сохранение -----
         await _userRepository.SaveChangesAsync();
-        await _studentRepository.SaveChangesAsync();
-        await _teacherRepository.SaveChangesAsync();
-        return Ok("Bulk registration complete");
+
+        // 🔧 ВАЖНО: явно сохранить изменённые группы
+        foreach (var gid in touchedGroupIds)
+            await _groupRepository.Update(groupsById[gid]);   // если UpdateRange нет, делаем поштучно
+
+        await _groupRepository.SaveChangesAsync();
+        return Ok("Bulk registration complete (upsert).");
     }
+
     // DTOs
     public class RegisterDto
     {

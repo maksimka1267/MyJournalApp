@@ -7,10 +7,15 @@ using System.Security.Claims;
 public class JournalController : ControllerBase
 {
     private readonly IJournalEntryRepository _journalRepo;
-
-    public JournalController(IJournalEntryRepository journalRepo)
+    private readonly IGradeRepository _gradeRepository;
+    private readonly IJournalGenerationService _journalGenerationService; // Внедряем новый сервис
+    public JournalController(IJournalEntryRepository journalRepo,
+                            IGradeRepository gradeRepository,
+                            IJournalGenerationService journalGenerationService)
     {
         _journalRepo = journalRepo;
+        _gradeRepository = gradeRepository;
+        _journalGenerationService = journalGenerationService;
     }
 
     [Authorize]
@@ -60,27 +65,42 @@ public class JournalController : ControllerBase
         var existing = await _journalRepo.GetByIdAsync(id);
         if (existing == null) return NotFound();
 
-        existing.Subject = dto.Subject;
+        existing.Name = dto.Name;
         existing.Date = dto.Date;
         existing.Comment = dto.Comment;
         existing.GroupId = dto.GroupId;
         existing.TeacherId = dto.TeacherId;
 
-        _journalRepo.Update(existing);
+        await _journalRepo.Update(existing);
         await _journalRepo.SaveChangesAsync();
         return Ok(existing);
     }
 
     [Authorize]
-    [HttpPost("{id}")]
+    [HttpDelete("{id}")]
     public async Task<IActionResult> Delete(Guid id)
     {
         var existing = await _journalRepo.GetByIdAsync(id);
         if (existing == null) return NotFound();
 
-        _journalRepo.Delete(existing);
-        await _journalRepo.SaveChangesAsync();
+        await _gradeRepository.DeleteByJournalEntryIdAsync(id);
+
+        await _journalRepo.Delete(existing);
         return NoContent(); // HTTP 204, тело пустое
+    }
+    [Authorize(Roles = "Admin")] // Рекомендуется защитить этот метод
+    [HttpPost("generate-from-schedule")]
+    public async Task<IActionResult> GenerateJournals()
+    {
+        var result = await _journalGenerationService.GenerateJournalsFromScheduleAsync();
+
+        if (!result.Success)
+        {
+            // Можно вернуть BadRequest, если в сервисе произошла предвиденная ошибка
+            return StatusCode(500, result);
+        }
+
+        return Ok(result);
     }
     public class JournalEntryDto
     {

@@ -20,6 +20,14 @@ public class GradeRepository : Repository<Grade>, IGradeRepository
                          g.Created.Date <= endDate.Date)
             .ToListAsync();
     }
+    public async Task<int> DeleteByJournalEntryIdAsync(Guid journalEntryId)
+    {
+        var grades = await _context.Grades.Where(g => g.JournalEntryId == journalEntryId).ToListAsync();
+        if (grades.Count == 0) return 0;
+
+        _context.Grades.RemoveRange(grades);
+        return await _context.SaveChangesAsync();
+    }
 
     public async Task<IEnumerable<Grade>> GetByStudentIdAsync(Guid studentId)
     {

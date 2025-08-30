@@ -4,5 +4,7 @@
     Task<List<Grade>> GetByJournalAndDateAsync(Guid journalEntryId, DateTime date);
     Task<IEnumerable<Grade>> GetAbsencesByStudentIdsAndDateRangeAsync(List<Guid> studentIds, DateTime startDate, DateTime endDate);
     Task<IEnumerable<Grade>> GetByStudentIdAsync(Guid studentId);
+    Task<int> DeleteByJournalEntryIdAsync(Guid journalEntryId);
+
 
 }

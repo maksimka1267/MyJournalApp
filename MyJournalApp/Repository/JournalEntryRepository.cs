@@ -18,4 +18,16 @@ public class JournalEntryRepository : Repository<JournalEntry>, IJournalEntryRep
             .Where(j => j.TeacherId.Contains(teacherId))
             .ToListAsync();
     }
+    public async Task<List<string>> GetJournalSubjectsByGroupIdsAsync(IEnumerable<Guid> groupIds)
+    {
+        return await _context.JournalEntries
+            .Where(j => groupIds.Contains(j.GroupId))
+            .Select(j => j.Name)
+            .ToListAsync();
+    }
+    public async Task AddRangeAsync(IEnumerable<JournalEntry> entries)
+    {
+        await _context.JournalEntries.AddRangeAsync(entries);
+        await _context.SaveChangesAsync();
+    }
 }

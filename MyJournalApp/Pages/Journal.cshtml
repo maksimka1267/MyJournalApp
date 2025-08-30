@@ -10,7 +10,7 @@
     {
         groupName = gn;
     }
-    var subjectName = selectedJournal?.Subject ?? "";
+    var subjectName = selectedJournal?.Name ?? "";
     // Для быстрого доступа к именам пользователей
     var userById = Model.Users?.ToDictionary(u => u.Id, u => u.FullName ?? "—")
                    ?? new Dictionary<Guid, string>();
@@ -48,16 +48,25 @@
 
 @if (Model.Role == "Admin")
 {
-    <button class="btn btn-primary mb-3" data-bs-toggle="modal" data-bs-target="#addJournalModal">
-        ➕ Додати журнал
-    </button>
-    <form method="post" onsubmit="return confirm('Усі журнали та оцінки будуть видалені. Продовжити?');">
-        @Html.AntiForgeryToken()
-        <input type="hidden" name="handler" value="DeleteAllJournals" />
-        <button class="btn btn-danger">🗑 Видалити всі журнали</button>
-    </form>
+    <div class="d-flex flex-wrap gap-2 mb-3">
+        <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#addJournalModal">
+            ➕ Додати журнал
+        </button>
 
+        <form method="post" onsubmit="return confirm('Згенерувати журнали з розкладу?');">
+            @Html.AntiForgeryToken()
+            <input type="hidden" name="handler" value="GenerateJournals" />
+            <button class="btn btn-outline-primary">⚙️ Згенерувати журнали з розкладу</button>
+        </form>
+
+        <form method="post" onsubmit="return confirm('Усі журнали та оцінки будуть видалені. Продовжити?');">
+            @Html.AntiForgeryToken()
+            <input type="hidden" name="handler" value="DeleteAllJournals" />
+            <button class="btn btn-danger">🗑 Видалити всі журнали</button>
+        </form>
+    </div>
 }
+
 
 @if (Model.Role == "Teacher" || Model.Role == "Admin")
 {
@@ -66,12 +75,12 @@
             <div class="input-group">
                 <select name="selectedJournalId" class="form-select" onchange="this.form.submit()">
                     @foreach (var j in Model.Journals
-                                    .OrderBy(j => j.Name ?? j.Subject ?? "")
+                                    .OrderBy(j => j.Name ?? j.Name ?? "")
                                     .ThenBy(j => Model.GroupNames.GetValueOrDefault(j.GroupId, ""))
                                     .ThenBy(j => j.Date))
                     {
                         var group = Model.GroupNames.GetValueOrDefault(j.GroupId, "Група");
-                        var subject = j.Subject ?? "Предмет";
+                        var subject = j.Name ?? "Предмет";
                         var text = !string.IsNullOrWhiteSpace(j.Name)
                         ? j.Name
                         : $"{subject} — {group} ({j.Date:yyyy-MM-dd})";
@@ -106,18 +115,21 @@
 {
     <div class="card mt-3">
         <div class="card-body">
-            <h4>@subjectName — Група @groupName</h4>
+            <h4>@subjectName</h4>
             @if (Model.Role == "Admin")
             {
-                var teacherNamesForJournal = Model.Grades
-                .Where(g => g.JournalEntryId == Model.SelectedJournalId)
-                .Select(g => userById.GetValueOrDefault(g.TeacherId, "—"))
+                var teacherIds = selectedJournal?.TeacherId ?? new List<Guid>();
+                var teacherNamesForJournal = teacherIds
+                .Select(id =>
+                userById.TryGetValue(id, out var n1) ? n1 :
+                (Model.TeacherNames.TryGetValue(id, out var n2) ? n2 : "—"))
                 .Distinct()
                 .ToList();
 
                 var headerTeacherText = teacherNamesForJournal.Count > 0
                 ? string.Join(", ", teacherNamesForJournal)
                 : "—";
+
                 <div class="text-muted mb-2">
                     Викладач: <strong>@headerTeacherText</strong>
                 </div>
@@ -146,7 +158,7 @@
                     <tbody>
                         @foreach (var journal in Model.Journals)
                         {
-                            var subject = journal.Subject;
+                            var subject = journal.Name;
                             var studentGrades = Model.Grades
                             .Where(g => g.JournalEntryId == journal.Id && g.StudentId == studentId)
                             .ToList();
@@ -244,7 +256,6 @@
                                             <td class="text-center">
                                                 @{
                                                     var dateKey = column.Date.ToString("yyyyMMdd");
-                                                    var isLecture = string.Equals(column.Topic, "Лекція", StringComparison.OrdinalIgnoreCase);
 
                                                     var inputName = $"GradesForUpdate.Grades[{student.Id}-{dateKey}]";
                                                     var presenceInputName = $"GradesForUpdate.Presence[{student.Id}-{dateKey}]";
@@ -257,30 +268,27 @@
                                                     : "";
                                                 }
                                                 <div class="d-flex flex-column gap-1" data-datekey="@dateKey">
-                                                    @* ПОЛЕ ОЦЕНКИ скрываем, если тема — «Лекція» *@
-                                                    @if (!isLecture)
-                                                    {
-                                                        <input type="number"
-                                                               class="form-control form-control-sm text-center grade-input"
-                                                               data-name="@inputName"
-                                                               data-initial="@initialStr"
-                                                               value="@initialStr"
-                                                               min="0" max="@selectedJournal.MaxValue"
-                                                               title="Вчитель: @(grade != null ? userById.GetValueOrDefault(grade.TeacherId, "Невідомо") : "—")"
-                                                               @((Model.IsCuratorOnlyForSelectedJournal || isReadOnly || Model.Role == "Admin") ? "readonly" : "") />
-                                                    }
+
+                                                    <!-- ВСЕГДА показываем поле оценки -->
+                                                    <input type="number"
+                                                           class="form-control form-control-sm text-center grade-input"
+                                                           data-name="@inputName"
+                                                           data-initial="@initialStr"
+                                                           value="@initialStr"
+                                                           min="0" max="@selectedJournal.MaxValue"
+                                                           title="Вчитель: @(grade != null ? userById.GetValueOrDefault(grade.TeacherId, "Невідомо") : "—")"
+                                                           @((Model.IsCuratorOnlyForSelectedJournal || isReadOnly || Model.Role == "Admin") ? "readonly" : "") />
 
                                                     <select class="form-select form-select-sm presence-select text-center"
                                                             data-name="@presenceInputName"
                                                             data-initial="@initialPresence"
                                                             @((Model.IsCuratorOnlyForSelectedJournal || isReadOnly || Model.Role == "Admin") ? "disabled" : "")>
-                                                            <option value="" @(initialPresence == "" ? "selected" : "")></option>
-                                                            <option value="true" @(initialPresence == "true" ? "selected" : "")>П</option>
-                                                            <option value="false" @(initialPresence == "false" ? "selected" : "")>Н</option>
+                                                        <option value="" @(initialPresence == "" ? "selected" : "")></option>
+                                                        <option value="true" @(initialPresence == "true" ? "selected" : "")>П</option>
+                                                        <option value="false" @(initialPresence == "false" ? "selected" : "")>Н</option>
                                                     </select>
                                                 </div>
                                             </td>
-
                                         }
                                     </tr>
                                 }

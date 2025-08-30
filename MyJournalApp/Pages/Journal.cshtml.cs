@@ -140,8 +140,35 @@ public class JournalModel : PageModel
             "DeleteAllJournals" => await OnPostDeleteAllJournalsAsync(),
             "UpdateGrades" => await OnPostUpdateGradesAsync(),
             "AddSpecialGrades" => await OnPostAddSpecialGradesAsync(),
+            "GenerateJournals" => await OnPostGenerateJournalsAsync(),
             _ => await OnGetAsync(SelectedJournalId)
         };
+    }
+    public async Task<IActionResult> OnPostGenerateJournalsAsync()
+    {
+        // Дополнительная проверка безопасности на стороне сервера
+        if (Role != "Admin")
+        {
+            return Forbid(); // HTTP 403
+        }
+
+        // Вызываем наш новый API эндпоинт
+        // Тело запроса не нужно, поэтому второй аргумент null
+        var response = await _httpClient.PostAsync(ApiUrl("/api/Journal/generate-from-schedule"), null);
+
+        if (response.IsSuccessStatusCode)
+        {
+            // Пытаемся прочитать детальный ответ от API
+            var result = await response.Content.ReadFromJsonAsync<GenerationResult>();
+            FlashMessage = result?.Message ?? "Операция по генерации журналов завершена успешно.";
+        }
+        else
+        {
+            FlashMessage = "Произошла ошибка при генерации журналов. Пожалуйста, проверьте логи сервера.";
+        }
+
+        // Перезагружаем страницу, чтобы показать FlashMessage и обновить список журналов
+        return RedirectToPage();
     }
 
     public async Task<IActionResult> OnPostAddSpecialGradesAsync()
@@ -161,30 +188,71 @@ public class JournalModel : PageModel
         var token = Request.Cookies["cookies"];
         _httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
 
+        var date = GradesForUpdate.Date.Date;
         bool hasError = false;
+
+        // 1) Загружаем все существующие оценки на эту дату и журнал
+        var existingResp = await _httpClient.GetAsync(ApiUrl(
+            $"/api/Grade/journal/{GradesForUpdate.JournalId}/date/{date:yyyy-MM-dd}"));
+        var existingGrades = existingResp.IsSuccessStatusCode
+            ? await existingResp.Content.ReadFromJsonAsync<List<Grade>>() ?? new()
+            : new List<Grade>();
+
+        var existingByStudent = existingGrades.ToDictionary(g => g.StudentId, g => g);
+
+        // 2) Пробегаем по введённым оценкам
         foreach (var (studentKey, gradeValue) in GradesForUpdate.Grades)
         {
+            if (!Guid.TryParse(studentKey, out var studentId)) continue;
             if (!gradeValue.HasValue) continue;
+
             GradesForUpdate.Presence.TryGetValue(studentKey, out bool? presenceValue);
 
-            var newGrade = new Grade
+            if (existingByStudent.TryGetValue(studentId, out var existing))
             {
-                StudentId = Guid.TryParse(studentKey, out var parsedId) ? parsedId : Guid.Empty,
-                JournalEntryId = GradesForUpdate.JournalId,
-                Value = gradeValue.Value,
-                Comment = GradesForUpdate.Comment,
-                TeacherId = UserId,
-                Created = GradesForUpdate.Date,
-                IsPresent = presenceValue,
-            };
-            var response = await _httpClient.PostAsJsonAsync(ApiUrl("/api/Grade"), newGrade);
-            if (!response.IsSuccessStatusCode) hasError = true;
+                // UPDATE
+                existing.Value = gradeValue.Value;
+                existing.IsPresent = presenceValue;
+                existing.Comment = GradesForUpdate.Comment;
+                existing.TeacherId = UserId;
+                var upd = await _httpClient.PutAsJsonAsync(ApiUrl($"/api/Grade/{existing.Id}"), existing);
+                if (!upd.IsSuccessStatusCode) hasError = true;
+            }
+            else
+            {
+                // CREATE
+                var newGrade = new Grade
+                {
+                    Id = Guid.NewGuid(),
+                    StudentId = studentId,
+                    JournalEntryId = GradesForUpdate.JournalId,
+                    Value = gradeValue.Value,
+                    Comment = GradesForUpdate.Comment,
+                    TeacherId = UserId,
+                    Created = date,
+                    IsPresent = presenceValue
+                };
+                var resp = await _httpClient.PostAsJsonAsync(ApiUrl("/api/Grade"), newGrade);
+                if (!resp.IsSuccessStatusCode) hasError = true;
+            }
         }
 
-        FlashMessage = hasError ? "Виникли помилки при збереженні." : "Тематичні оцінки успішно додано.";
+        // 3) Обновляем тему (Comment) у всех записей этой даты
+        foreach (var g in existingGrades)
+        {
+            if (g.Comment != GradesForUpdate.Comment)
+            {
+                g.Comment = GradesForUpdate.Comment;
+                var upd = await _httpClient.PutAsJsonAsync(ApiUrl($"/api/Grade/{g.Id}"), g);
+                if (!upd.IsSuccessStatusCode) hasError = true;
+            }
+        }
+
+        FlashMessage = hasError
+            ? "Виникли помилки при збереженні."
+            : "Колонку успішно збережено/оновлено.";
         return RedirectToPage(new { selectedJournalId = GradesForUpdate.JournalId });
     }
-
     private async Task LoadStudentView()
     {
         var grades = await _httpClient.GetFromJsonAsync<List<Grade>>(ApiUrl($"/api/Grade/byStudent/{UserId}"));
@@ -318,7 +386,6 @@ public class JournalModel : PageModel
         {
             Id = Guid.NewGuid(),
             Name = NewJournal.Name,
-            Subject = NewJournal.Subject!,
             MaxValue = NewJournal.MaxValue,
             Date = DateTime.UtcNow,
             GroupId = NewJournal.GroupId,
@@ -497,15 +564,6 @@ public class JournalModel : PageModel
             ModelState.AddModelError("", "Не вдалося видалити журнал.");
             return await OnGetAsync();
         }
-
-        var gradesResp = await _httpClient.GetAsync(ApiUrl($"/api/Grade/journal/{id}"));
-        if (gradesResp.IsSuccessStatusCode)
-        {
-            var grades = await gradesResp.Content.ReadFromJsonAsync<List<Grade>>();
-            foreach (var grade in grades ?? new())
-                await _httpClient.DeleteAsync(ApiUrl($"/api/Grade/{grade.Id}"));
-        }
-
         FlashMessage = "Журнал та оцінки успішно видалено.";
         return RedirectToPage();
     }
@@ -568,6 +626,12 @@ public class CreateJournalModel
     public int MaxValue {  get; set; }
     public Guid GroupId { get; set; }
     public Guid TeacherId { get; set; }
+}
+public class GenerationResult
+{
+    public bool Success { get; set; }
+    public int CreatedCount { get; set; }
+    public string Message { get; set; }
 }
 
 public class UpdateDayGradesModel

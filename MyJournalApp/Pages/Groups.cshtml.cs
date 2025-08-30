@@ -78,7 +78,7 @@ public class GroupsModel : PageModel
         return Page();
     }
 
-    public async Task<IActionResult> OnPostAsync(string handler)
+    public async Task<IActionResult> OnPostAsync(string handler, Guid id)
     {
         var token = Request.Cookies["cookies"];
         if (string.IsNullOrEmpty(token))
@@ -92,10 +92,29 @@ public class GroupsModel : PageModel
             "MoveStudent" => await MoveStudentAsync(),
             "CreateGroup" => await CreateGroupAsync(),
             "GenerateReport" => await GenerateReportAsync(),
+            "DeleteGroup" => await DeleteGroupAsync(id),
             _ => Page()
         };
     }
+    private async Task<IActionResult> DeleteGroupAsync(Guid id)
+    {
+        if (id == Guid.Empty)
+        {
+            TempData["Error"] = "Невірний ідентифікатор групи.";
+            return RedirectToPage();
+        }
 
+        var resp = await _httpClient.DeleteAsync(ApiUrl($"/api/Group/{id}"));
+        if (!resp.IsSuccessStatusCode)
+        {
+            // Можно прочитать причину: var text = await resp.Content.ReadAsStringAsync();
+            TempData["Error"] = "Не вдалося видалити групу. Переконайтесь, що у вас є права, і спробуйте ще раз.";
+            return RedirectToPage();
+        }
+
+        TempData["Success"] = "Групу видалено.";
+        return RedirectToPage();
+    }
     private async Task<IActionResult> ImportGroupsFromExcelAsync()
     {
         if (ExcelImport?.File == null || ExcelImport.File.Length == 0)

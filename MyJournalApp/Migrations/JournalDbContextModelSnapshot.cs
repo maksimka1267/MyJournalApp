@@ -51,7 +51,7 @@ namespace MyJournalApp.Migrations
 
                     b.HasKey("Id");
 
-                    b.ToTable("AcademicEvents");
+                    b.ToTable("AcademicEvents", "dbo");
                 });
 
             modelBuilder.Entity("Grade", b =>
@@ -129,10 +129,6 @@ namespace MyJournalApp.Migrations
                         .HasColumnType("int");
 
                     b.Property<string>("Name")
-                        .IsRequired()
-                        .HasColumnType("nvarchar(max)");
-
-                    b.Property<string>("Subject")
                         .IsRequired()
                         .HasColumnType("nvarchar(max)");
 

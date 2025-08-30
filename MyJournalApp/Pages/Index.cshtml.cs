@@ -99,6 +99,14 @@ public class IndexModel : PageModel
         }
         else if (Role == "Teacher")
         {
+            var groupResponse = await client.GetAsync(ApiUrl("/api/Group/all"));
+            if (groupResponse.IsSuccessStatusCode)
+            {
+                var json = await groupResponse.Content.ReadAsStringAsync();
+                AllGroups = JsonSerializer.Deserialize<List<Group>>(json,
+                    new JsonSerializerOptions { PropertyNameCaseInsensitive = true }) ?? new();
+            }
+
             if (Guid.TryParse(userId, out var teacherId))
             {
                 var response = await client.GetAsync(ApiUrl("/api/Lesson"));

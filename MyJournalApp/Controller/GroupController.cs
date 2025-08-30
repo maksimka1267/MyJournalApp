@@ -296,16 +296,16 @@ public class GroupController : ControllerBase
         // 2) Подготовим справочники ОДИН РАЗ для максимальной производительности
 
         // Получаем всех пользователей-преподавателей
-        var teacherUsers = (await _userRepository.GetAllAsync()).Where(u => u.Role == "Teacher");
+        var teacherUsers = await _teacherRepository.GetAllTeachersAsync();
 
-        // Создаем словарь, где ключ - это КОРОТКОЕ ФИО ("Иванов И.И.")
-        // Предполагается, что ToShortName теперь публичный метод в вашем репозитории
-        var usersByShortName = teacherUsers.ToDictionary(
-            u => _teacherRepository.ToShortName(u.FullName).Trim(), // Используем публичный метод
-            u => u,
-            StringComparer.OrdinalIgnoreCase);
+        var usersByShortName = teacherUsers
+            .Where(u => !string.IsNullOrWhiteSpace(_teacherRepository.ToShortName(u.FullName)))
+            .GroupBy(u => _teacherRepository.ToShortName(u.FullName).Trim(), StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(
+                g => g.Key,      // Ключ - это короткое ФИО
+                g => g.First(),  // Значение - первый попавшийся пользователь с таким ФИО
+                StringComparer.OrdinalIgnoreCase);
 
-        // Загружаем остальные данные для быстрой работы в памяти
         var allTeachers = await _teacherRepository.GetAllAsync();
         var teachersById = allTeachers.ToDictionary(t => t.Id);
 

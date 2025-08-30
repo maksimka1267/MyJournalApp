@@ -4,5 +4,7 @@ public interface IJournalEntryRepository : IRepository<JournalEntry>
 {
     Task<IEnumerable<JournalEntry>> GetByGroupIdAsync(Guid groupId);
     Task<IEnumerable<JournalEntry>> GetByTeacherIdAsync(Guid teacherId);
+    Task<List<string>> GetJournalSubjectsByGroupIdsAsync(IEnumerable<Guid> groupIds);
+    Task AddRangeAsync(IEnumerable<JournalEntry> entries);
 
 }

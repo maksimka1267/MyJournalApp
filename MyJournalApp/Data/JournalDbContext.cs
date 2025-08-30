@@ -17,6 +17,11 @@ namespace MyJournalApp.Data
         public DbSet<Schedule> Schedules => Set<Schedule>();
         public DbSet<JournalEntry> JournalEntries => Set<JournalEntry>();
         public DbSet<AcademicEvent> AcademicEvents => Set<AcademicEvent>();
+        protected override void OnModelCreating(ModelBuilder modelBuilder)
+        {
+            base.OnModelCreating(modelBuilder);
+            modelBuilder.Entity<AcademicEvent>().ToTable("AcademicEvents", "dbo"); // или нужная схема
+        }
 
     }
 

@@ -141,8 +141,21 @@
     foreach (var group in Model.GroupsWithDetails.OrderBy(g => g.Group.Name))
     {
         <div class="group-block mb-4 p-3 border rounded">
-            <h3>@group.Group.Name</h3>
-            <p><strong>Керівник групи:</strong> @group.TeacherName</p>
+            <div class="d-flex align-items-center justify-content-between">
+                <h3 class="mb-0">@group.Group.Name</h3>
+
+                @if (User.IsInRole("Admin"))
+                {
+                    <form method="post" class="ms-3" onsubmit="return confirm('Видалити групу «@group.Group.Name»? Це дію неможливо скасувати.');">
+                        @Html.AntiForgeryToken()
+                        <input type="hidden" name="handler" value="DeleteGroup" />
+                        <input type="hidden" name="id" value="@group.Group.Id" />
+                        <button type="submit" class="btn btn-sm btn-outline-danger">
+                            🗑 Видалити групу
+                        </button>
+                    </form>
+                }
+            </div>            <p><strong>Керівник групи:</strong> @group.TeacherName</p>
             <p><strong>Email:</strong> @group.TeacherEmail</p>
 
             @if (group.Students.Any())
