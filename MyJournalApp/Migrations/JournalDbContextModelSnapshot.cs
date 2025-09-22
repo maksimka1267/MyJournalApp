@@ -17,7 +17,7 @@ namespace MyJournalApp.Migrations
         {
 #pragma warning disable 612, 618
             modelBuilder
-                .HasAnnotation("ProductVersion", "9.0.6")
+                .HasAnnotation("ProductVersion", "9.0.8")
                 .HasAnnotation("Relational:MaxIdentifierLength", 128);
 
             SqlServerModelBuilderExtensions.UseIdentityColumns(modelBuilder);
@@ -51,7 +51,7 @@ namespace MyJournalApp.Migrations
 
                     b.HasKey("Id");
 
-                    b.ToTable("AcademicEvents", "dbo");
+                    b.ToTable("AcademicEvents");
                 });
 
             modelBuilder.Entity("Grade", b =>
@@ -132,6 +132,10 @@ namespace MyJournalApp.Migrations
                         .IsRequired()
                         .HasColumnType("nvarchar(max)");
 
+                    b.Property<string>("Subject")
+                        .IsRequired()
+                        .HasColumnType("nvarchar(max)");
+
                     b.PrimitiveCollection<string>("TeacherId")
                         .IsRequired()
                         .HasColumnType("nvarchar(max)");
@@ -159,6 +163,9 @@ namespace MyJournalApp.Migrations
                     b.Property<string>("Name")
                         .IsRequired()
                         .HasColumnType("nvarchar(max)");
+
+                    b.Property<Guid?>("SecondTeacherId")
+                        .HasColumnType("uniqueidentifier");
 
                     b.Property<DateTime>("StartTime")
                         .HasColumnType("datetime2");

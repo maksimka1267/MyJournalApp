@@ -23,6 +23,39 @@ public class IndexModel : PageModel
 
     public readonly Dictionary<Guid, string> _teacherNameCache = new();
     public string Role { get; set; } = "";
+    [BindProperty] public string? BulkChangesJson { get; set; }  // заполняет JS
+
+    // ---- DTOs для клиентской сборки изменений ----
+    public class BulkChangeDto
+    {
+        public Guid Id { get; set; }             // lessonId (базового дня)
+        public string? Topic { get; set; }       // null = поле не трогали; "" = стереть
+        public string? Homework { get; set; }    // null = поле не трогали; "" = стереть
+        public int? Clocks { get; set; }         // null = поле не трогали
+        public string? Name { get; set; }        // опционально: inline-редактирование предмета
+        public Guid? TeacherId { get; set; }     // опционально: inline-редактирование викладача
+        public DateTime StartDate { get; set; }  // yyyy-MM-dd из data-lesson-date (дата базового дня)
+        public bool? Delete { get; set; }        // true => удалить слот по диапазону
+    }
+
+    // ---- DTO, который отправляем в API /api/Lesson/bulk-apply ----
+    public class BulkApplyLessonDto
+    {
+        public Guid Id { get; set; }
+        public Guid GroupId { get; set; }
+        public DateTime StartTime { get; set; }
+
+        public string? Name { get; set; }
+        public string? Topic { get; set; }
+        public string? Homework { get; set; }
+        public int? Clocks { get; set; }
+        public Guid TeacherId { get; set; }
+        public Guid? SecondTeacherId { get; set; }
+
+        public bool Delete { get; set; }
+    }
+
+    public List<string> GroupSubjects { get; set; } = new();
     public List<Group> AllGroups { get; set; } = new();
     public List<Lesson> DayLessons { get; set; } = new();
     public List<User> Teachers { get; set; } = new();
@@ -34,6 +67,15 @@ public class IndexModel : PageModel
 
     [BindProperty(SupportsGet = true)]
     public DateOnly SelectedDate { get; set; } = DateOnly.FromDateTime(DateTime.Today);
+
+    [BindProperty(SupportsGet = true)]
+    public bool BulkMode { get; set; }  // чтобы включать/выключать через query
+
+    [TempData]
+    public DateTime? LastEditedDateIso { get; set; } // дата последнего измененного дня
+
+    [BindProperty] public DateTime BulkStartDate { get; set; } // из hidden (заполняет JS)
+    [BindProperty] public DateTime BulkEndDate { get; set; }   // из input[type=date] (заполняет JS)
 
     [BindProperty] public LessonFormDto InputLesson { get; set; } = new();
     [BindProperty] public ExportFormDto ExportFilters { get; set; } = new();
@@ -65,6 +107,8 @@ public class IndexModel : PageModel
                 var json = await teacherResponse.Content.ReadAsStringAsync();
                 Teachers = JsonSerializer.Deserialize<List<User>>(json, new JsonSerializerOptions { PropertyNameCaseInsensitive = true }) ?? new();
             }
+
+            await LoadSubjectsForGroupAsync(client, SelectedGroupId);
         }
 
         if (Role == "Student")
@@ -103,8 +147,7 @@ public class IndexModel : PageModel
             if (groupResponse.IsSuccessStatusCode)
             {
                 var json = await groupResponse.Content.ReadAsStringAsync();
-                AllGroups = JsonSerializer.Deserialize<List<Group>>(json,
-                    new JsonSerializerOptions { PropertyNameCaseInsensitive = true }) ?? new();
+                AllGroups = JsonSerializer.Deserialize<List<Group>>(json, new JsonSerializerOptions { PropertyNameCaseInsensitive = true }) ?? new();
             }
 
             if (Guid.TryParse(userId, out var teacherId))
@@ -114,7 +157,12 @@ public class IndexModel : PageModel
                 {
                     var json = await response.Content.ReadAsStringAsync();
                     var allLessons = JsonSerializer.Deserialize<List<Lesson>>(json, new JsonSerializerOptions { PropertyNameCaseInsensitive = true }) ?? new();
-                    DayLessons = allLessons.Where(l => l.TeacherId == teacherId && DateOnly.FromDateTime(l.StartTime.Date) == SelectedDate).ToList();
+                    DayLessons = allLessons
+                        .Where(l =>
+                            DateOnly.FromDateTime(l.StartTime.Date) == SelectedDate &&
+                            (l.TeacherId == teacherId || (l.SecondTeacherId.HasValue && l.SecondTeacherId.Value == teacherId))
+                        )
+                        .ToList();
                 }
 
                 var teacherResponse = await client.GetAsync(ApiUrl($"/api/User/teacher-model/{teacherId}"));
@@ -129,6 +177,20 @@ public class IndexModel : PageModel
         WeekDays = GetWeekDays(SelectedDate);
         await PreloadTeacherNames();
         return Page();
+    }
+
+    private async Task LoadSubjectsForGroupAsync(HttpClient client, Guid groupId)
+    {
+        if (groupId == Guid.Empty) return;
+
+        var url = ApiUrl($"/api/Lesson/group/{groupId}/subjects");
+        var response = await client.GetAsync(url);
+        if (response.IsSuccessStatusCode)
+        {
+            var json = await response.Content.ReadAsStringAsync();
+            GroupSubjects = JsonSerializer.Deserialize<List<string>>(json,
+                new JsonSerializerOptions { PropertyNameCaseInsensitive = true }) ?? new();
+        }
     }
 
     public async Task<IActionResult> OnPostAsync(string? handler)
@@ -161,23 +223,36 @@ public class IndexModel : PageModel
                 TempData["ErrorMessage"] = "Некоректні дані імпорту.";
                 return RedirectToPage(new { SelectedGroupId, SelectedDate });
 
+            case "ChangeTeacher":
+                if (Role != "Admin") return Forbid();
+                await ChangeTeacherAsync(client);
+
+                var changed = await client.GetAsync(ApiUrl($"/api/Lesson/{InputLesson.Id}"));
+                if (changed.IsSuccessStatusCode)
+                {
+                    var json = await changed.Content.ReadAsStringAsync();
+                    var lesson = JsonSerializer.Deserialize<Lesson>(json, new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+                    if (lesson != null) LastEditedDateIso = lesson.StartTime;
+                }
+                return RedirectToPage(new { SelectedGroupId = InputLesson.GroupId, SelectedDate, BulkMode });
+
             case "AddLesson":
                 if (Role != "Admin") return Forbid();
                 await CreateLessonAsync(client);
-                return RedirectToPage(new
-                {
-                    SelectedGroupId = InputLesson.GroupId,
-                    SelectedDate = DateOnly.FromDateTime(InputLesson.StartTime)
-                });
+                LastEditedDateIso = InputLesson.StartTime;
+                return RedirectToPage(new { SelectedGroupId = InputLesson.GroupId, SelectedDate = DateOnly.FromDateTime(InputLesson.StartTime), BulkMode });
 
             case "EditLesson":
                 if (Role != "Teacher") return Forbid();
                 await UpdateTopicAsync(client);
-                return RedirectToPage(new
-                {
-                    SelectedGroupId = InputLesson.GroupId,
-                    SelectedDate = DateOnly.FromDateTime(InputLesson.StartTime)
-                });
+                LastEditedDateIso = InputLesson.StartTime;
+                return RedirectToPage(new { SelectedGroupId = InputLesson.GroupId, SelectedDate = DateOnly.FromDateTime(InputLesson.StartTime), BulkMode });
+
+            case "BulkApplyChanges":
+                if (Role != "Admin") return Forbid();
+                await ApplyBulkChangesAsync();
+                LastEditedDateIso = null;
+                return RedirectToPage(new { SelectedGroupId, SelectedDate, BulkMode = false });
 
             case "Export":
                 return await OnPostExportAsync();
@@ -185,6 +260,108 @@ public class IndexModel : PageModel
             default:
                 return RedirectToPage(new { SelectedGroupId, SelectedDate });
         }
+    }
+
+    private async Task ApplyBulkChangesAsync()
+    {
+        var token = Request.Cookies["cookies"];
+        if (string.IsNullOrEmpty(token)) return;
+
+        // 1) Забираем изменения из формы
+        var changes = JsonSerializer.Deserialize<List<BulkChangeDto>>(
+            BulkChangesJson ?? "[]",
+            new JsonSerializerOptions { PropertyNameCaseInsensitive = true }
+        ) ?? new();
+        if (changes.Count == 0) return;
+
+        // 2) Определяем диапазон
+        var startDate = changes.Min(c => c.StartDate).Date;
+        var endDate = BulkEndDate.Date;
+        if (endDate < startDate)
+        {
+            TempData["ErrorMessage"] = "Кінцева дата раніше за початкову.";
+            return;
+        }
+
+        // 3) Подтягиваем уроки базового дня для текущей группы — чтобы иметь StartTime/GroupId и текущие значения полей
+        var client = _httpClientFactory.CreateClient();
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
+
+        var dayUrl = ApiUrl($"/api/Lesson/group/{SelectedGroupId}/date/{startDate:yyyy-MM-dd}");
+        var resp = await client.GetAsync(dayUrl);
+        if (!resp.IsSuccessStatusCode) return;
+
+        var json = await resp.Content.ReadAsStringAsync();
+        var dayLessons = JsonSerializer.Deserialize<List<Lesson>>(json,
+            new JsonSerializerOptions { PropertyNameCaseInsensitive = true }) ?? new();
+
+        var baselineById = dayLessons.ToDictionary(l => l.Id, l => l);
+
+        // 4) Собираем payload из BulkApplyLessonDto, с ФОЛБЭКОМ по Id
+        var payloadLessons = new List<BulkApplyLessonDto>();
+
+        foreach (var ch in changes)
+        {
+            Lesson? baseLesson;
+            if (!baselineById.TryGetValue(ch.Id, out baseLesson))
+            {
+                // Фикс: если Id не из базового дня — добираем урок напрямую по Id
+                var byIdResp = await client.GetAsync(ApiUrl($"/api/Lesson/{ch.Id}"));
+                if (!byIdResp.IsSuccessStatusCode) continue;
+
+                var js = await byIdResp.Content.ReadAsStringAsync();
+                baseLesson = JsonSerializer.Deserialize<Lesson>(js, new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+                if (baseLesson == null) continue;
+            }
+
+            var dto = new BulkApplyLessonDto
+            {
+                Id = baseLesson.Id,
+                GroupId = baseLesson.GroupId,
+                // Важен TimeOfDay слота — контроллер сопоставляет по нему
+                StartTime = baseLesson.StartTime,
+
+                // Если Delete=true — значения ниже игнорируются контроллером, но можно слать
+                Name = ch.Name ?? baseLesson.Name,
+                Topic = ch.Topic ?? baseLesson.Topic,
+                Homework = ch.Homework ?? baseLesson.Homework,
+                Clocks = ch.Clocks.HasValue ? ch.Clocks : baseLesson.Clocks,
+                TeacherId = ch.TeacherId ?? baseLesson.TeacherId,
+                SecondTeacherId = baseLesson.SecondTeacherId,
+
+                Delete = ch.Delete == true
+            };
+
+            payloadLessons.Add(dto);
+        }
+
+        if (payloadLessons.Count == 0) return;
+
+        var payload = new
+        {
+            Lessons = payloadLessons,
+            StartDate = startDate,
+            EndDate = endDate
+        };
+
+        var content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json");
+        await client.PostAsync(ApiUrl("/api/Lesson/bulk-apply"), content);
+    }
+
+    private async Task ChangeTeacherAsync(HttpClient client)
+    {
+        var getResponse = await client.GetAsync(ApiUrl($"/api/Lesson/{InputLesson.Id}"));
+        if (!getResponse.IsSuccessStatusCode) return;
+
+        var json = await getResponse.Content.ReadAsStringAsync();
+        var lesson = JsonSerializer.Deserialize<Lesson>(json, new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+        if (lesson == null) return;
+
+        lesson.TeacherId = InputLesson.TeacherId;
+
+        var updatedJson = JsonSerializer.Serialize(lesson);
+        var content = new StringContent(updatedJson, Encoding.UTF8, "application/json");
+        await client.PutAsync(ApiUrl($"/api/Lesson/{lesson.Id}"), content);
     }
 
     private async Task ImportLessonsAsync(HttpClient client, IFormFile file, Guid groupId, bool isNumerator)
@@ -244,12 +421,18 @@ public class IndexModel : PageModel
             Name = InputLesson.Name,
             Topic = InputLesson.Topic,
             Homework = InputLesson.Homework,
-            StartTime = InputLesson.StartTime
+            StartTime = InputLesson.StartTime,
+            Subject = "доданий вручну",
+
+            // НОВОЕ:
+            RepeatWeekly = InputLesson.RepeatWeekly,
+            EndDate = InputLesson.EndDate?.Date // null, если одиночный
         };
 
         var json = JsonSerializer.Serialize(lesson);
         var content = new StringContent(json, Encoding.UTF8, "application/json");
         await client.PostAsync(ApiUrl("/api/Lesson"), content);
+
     }
 
     private async Task UpdateTopicAsync(HttpClient client)
@@ -279,7 +462,11 @@ public class IndexModel : PageModel
     private async Task PreloadTeacherNames()
     {
         foreach (var lesson in DayLessons)
+        {
             await GetTeacherNameAsync(lesson.TeacherId);
+            if (lesson.SecondTeacherId.HasValue && lesson.SecondTeacherId.Value != Guid.Empty)
+                await GetTeacherNameAsync(lesson.SecondTeacherId.Value);
+        }
     }
 
     public async Task<string> GetTeacherNameAsync(Guid teacherId)
@@ -310,7 +497,7 @@ public class IndexModel : PageModel
         return $"{Request.Scheme}://{Request.Host}{path}";
     }
 
-    // DTOs
+    // ---- Формы ----
     public class ExportFormDto
     {
         [BindProperty] public Guid TeacherId { get; set; }
@@ -330,5 +517,8 @@ public class IndexModel : PageModel
         public string? Topic { get; set; } = "";
         public string? Homework { get; set; } = "";
         public int? Clocks { get; set; }
+        public bool RepeatWeekly { get; set; }       // чекбокс серії
+        public DateTime? EndDate { get; set; }       // дата завершення серії (тільки дата)
+
     }
 }

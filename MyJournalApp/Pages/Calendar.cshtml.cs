@@ -178,7 +178,6 @@ public class CalendarModel : PageModel
     // Собираем абсолютный URL к своему же API (тот же хост/схема, что и страница)
     private string ApiUrl(string relativePath)
     {
-        // нормализуем: всегда с одним ведущим слешем
         var path = relativePath.StartsWith("/") ? relativePath : "/" + relativePath;
         return $"{Request.Scheme}://{Request.Host}{path}";
     }

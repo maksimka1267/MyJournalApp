@@ -11,29 +11,57 @@
         groupName = gn;
     }
     var subjectName = selectedJournal?.Name ?? "";
-    // Для быстрого доступа к именам пользователей
     var userById = Model.Users?.ToDictionary(u => u.Id, u => u.FullName ?? "—")
                    ?? new Dictionary<Guid, string>();
 }
 <style>
-    /* убрать встроенную стрелку у Bootstrap form-select */
     .presence-select.form-select {
         background-image: none !important;
     }
 
-    /* убрать нативную стрелку браузера */
     .presence-select {
         appearance: none;
         -webkit-appearance: none;
         -moz-appearance: none;
-        padding-right: .5rem; /* раз стрелки нет — меньше отступ справа */
+        padding-right: .5rem;
     }
 
-        .presence-select::-ms-expand {
-            display: none;
-        }
-    /* старые IE/Edge */
+    .table-responsive {
+        overflow-x: auto;
+        position: relative;
+    }
+
+    /* Фіксовані (липкі) колонки */
+    .journal-table th.sticky-col,
+    .journal-table td.sticky-col {
+        position: sticky;
+        background: #fff; /* колір тла клітинки */
+        z-index: 2; /* над звичайними клітинками */
+    }
+
+    /* 1-а колонка: № */
+    .journal-table .sticky-1 {
+        left: 0;
+        z-index: 3; /* поверх другої, якщо накладеться */
+    }
+
+    /* 2-а колонка: Прізвище, Ім'я */
+    .journal-table .sticky-2 {
+        left: 40px; /* дорівнює ширині першої колонки № */
+        z-index: 3;
+    }
+
+    /* Щоб заголовки лишались читабельними над тлом */
+    .journal-table thead th.sticky-col {
+        background: #f8f9fa; /* як .table-light */
+        z-index: 4;
+    }
+
+    .presence-select::-ms-expand {
+        display: none;
+    }
 </style>
+
 <h2>Журнал</h2>
 
 @if (!ViewData.ModelState.IsValid)
@@ -66,7 +94,16 @@
         </form>
     </div>
 }
-
+@if (Model.Role == "Student")
+{
+    <form method="post" class="mb-3">
+        @Html.AntiForgeryToken()
+        <input type="hidden" name="handler" value="DownloadIndividualPlan" />
+        <button type="submit" class="btn btn-outline-success">
+            📒 Індивідуальний план
+        </button>
+    </form>
+}
 
 @if (Model.Role == "Teacher" || Model.Role == "Admin")
 {
@@ -92,12 +129,17 @@
                 </select>
             </div>
         </form>
+        <button class="btn btn-outline-success" data-bs-toggle="modal" data-bs-target="#exportStudentGradesModal">
+            ⬇️ Витягнути оцінки
+        </button>
+        @* Кнопка «Додати колонку» сверху *@
         @if ((Model.Role == "Teacher") && selectedJournal != null && !Model.IsCuratorOnlyForSelectedJournal)
         {
             <button class="btn btn-info" data-bs-toggle="modal" data-bs-target="#addSpecialGradesModal">
                 ➕ Додати колонку
             </button>
         }
+
         @if (Model.Role == "Admin")
         {
             <form method="post" onsubmit="return confirm('Видалити цей журнал?');">
@@ -106,7 +148,6 @@
                 <input type="hidden" name="id" value="@Model.SelectedJournalId" />
                 <button type="submit" class="btn btn-outline-danger">🗑 Видалити журнал</button>
             </form>
-
         }
     </div>
 }
@@ -116,6 +157,7 @@
     <div class="card mt-3">
         <div class="card-body">
             <h4>@subjectName</h4>
+
             @if (Model.Role == "Admin")
             {
                 var teacherIds = selectedJournal?.TeacherId ?? new List<Guid>();
@@ -134,10 +176,11 @@
                     Викладач: <strong>@headerTeacherText</strong>
                 </div>
             }
-            @* Роль: Student / Teacher / Admin — одна ветка *@
             @if (Model.Role == "Student")
             {
                 var studentId = Model.UserId;
+
+                // шапка — единый пул дат по всем оценкам студента
                 var allDates = Model.Grades
                 .Where(g => g.StudentId == studentId)
                 .Select(g => g.Created.Date)
@@ -158,24 +201,46 @@
                     <tbody>
                         @foreach (var journal in Model.Journals)
                         {
-                            var subject = journal.Name;
-                            var studentGrades = Model.Grades
+                            var subject = journal.Name ?? "";
+                            // все оценки ЭТОГО студента по ЭТОМУ журналу
+                            var studentGradesThisJournal = Model.Grades
                             .Where(g => g.JournalEntryId == journal.Id && g.StudentId == studentId)
                             .ToList();
 
                             <tr>
                                 <td>@subject</td>
+
                                 @foreach (var date in allDates)
                                 {
-                                    var grade = studentGrades.FirstOrDefault(g => g.Created.Date == date);
-                                    if (grade != null)
+                                    // кандидаты за КОНКРЕТНУЮ дату и КОНКРЕТНЫЙ журнал
+                                    var candidates = studentGradesThisJournal
+                                    .Where(g => g.Created.Date == date)
+                                    .ToList();
+
+                                    // 1) пробуем взять запись с ненулевой оценкой (значимая оценка)
+                                    var graded = candidates
+                                    .Where(g => (g.Value ?? 0) > 0)     // если Value int?, оставь как есть; если int, замени на g.Value > 0
+                                    .OrderByDescending(g => g.Value ?? 0)
+                                    .ThenBy(g => g.Created)
+                                    .FirstOrDefault();
+
+                                    // 2) если нет — просто возьмём первую (для тултипа/инфы), но выводить число не будем
+                                    var any = graded ?? candidates.OrderBy(g => g.Created).FirstOrDefault();
+
+                                    if (graded != null)
                                     {
-                                        <td title="Тип: @grade.Comment, Вчитель: @(userById.GetValueOrDefault(grade.TeacherId, "—"))" style="cursor: help;">
-                                            @grade.Value
+                                        <td title="Тип: @graded.Comment, Вчитель: @(userById.GetValueOrDefault(graded.TeacherId, "—"))" style="cursor: help;">
+                                            @graded.Value
                                         </td>
+                                    }
+                                    else if (any != null)
+                                    {
+                                        // есть запись (например, только присутствие), но оценки нет — ставим «–»
+                                        <td title="Тип: @any.Comment, Вчитель: @(userById.GetValueOrDefault(any.TeacherId, "—"))" style="cursor: help;">–</td>
                                     }
                                     else
                                     {
+                                        // вообще нет записей по этому предмету в эту дату
                                         <td>–</td>
                                     }
                                 }
@@ -191,10 +256,26 @@
                     <span class="me-3"><strong>П</strong> — присутній</span>
                     <span class="me-3"><strong>Н</strong> — відсутній</span>
                 </div>
+
+                @* Скрытые формы вне основной формы *@
+                <form id="createColForm" method="post" class="d-none">
+                    @Html.AntiForgeryToken()
+                    <input type="hidden" name="handler" value="CreateColumn" />
+                    <input type="hidden" name="SelectedJournalId" value="@Model.SelectedJournalId" />
+                </form>
+                <form id="deleteColForm" method="post" class="d-none">
+                    @Html.AntiForgeryToken()
+                    <input type="hidden" name="handler" value="DeleteColumn" />
+                    <input type="hidden" name="JournalId" value="@Model.SelectedJournalId" />
+                    <input type="hidden" name="DateKey" id="del_DateKey" />
+                    <input type="hidden" name="TopicKey" id="del_TopicKey" />
+                </form>
+
                 <form method="post">
                     @Html.AntiForgeryToken()
                     <input type="hidden" name="handler" value="UpdateGrades" />
                     <input type="hidden" name="GradesForUpdate.JournalId" value="@Model.SelectedJournalId" />
+
                     @if (Model.Role == "Teacher" && !Model.IsCuratorOnlyForSelectedJournal)
                     {
                         <div class="d-flex justify-content-end mb-2">
@@ -206,70 +287,113 @@
                         <table class="table table-bordered mt-3 journal-table">
                             <thead class="table-light">
                                 <tr>
-                                    <th style="min-width: 200px;">Прізвище, Ім'я</th>
+                                    <th class="sticky-col sticky-1" style="width: 40px;">№</th>
+                                    <th class="sticky-col sticky-2" style="min-width: 200px;">Прізвище, Ім'я</th>
+                                    @* ПЕРВАЯ служебная колонка: создать новую *@
+                                    <th class="align-top" style="min-width:220px;">
+                                        <div class="fw-semibold mb-1">Створити колонку</div>
+                                        <div class="d-flex flex-column gap-1">
+                                            <input type="date"
+                                                   class="form-control form-control-sm"
+                                                   name="NewColumn.Date"
+                                                   form="createColForm"
+                                                   value="@DateTime.Today.ToString("yyyy-MM-dd")"
+                                                   @(Model.Role == "Teacher" && Model.IsCuratorOnlyForSelectedJournal ? "disabled" : "") />
+                                            <select class="form-select form-select-sm"
+                                                    name="NewColumn.Topic"
+                                                    form="createColForm"
+                                                    @(Model.Role == "Teacher" && Model.IsCuratorOnlyForSelectedJournal ? "disabled" : "")>
+                                                <option value="">— Тема —</option>
+                                                <option value="Лекція">Лекція</option>
+                                                <option value="Практична робота">Практична робота</option>
+                                                <option value="Лабораторна робота">Лабораторна робота</option>
+                                                <option value="Напам'ять">Напам'ять</option>
+                                                <option value="Зошит/Конспект">Зошит/Конспект</option>
+                                                <option value="Семінарське заняття">Семінарське заняття</option>
+                                                <option value="Робота на уроці">Робота на уроці</option>
+                                            </select>
+                                            <button type="submit"
+                                                    class="btn btn-sm btn-outline-primary"
+                                                    form="createColForm"
+                                                    @(Model.Role == "Teacher" && Model.IsCuratorOnlyForSelectedJournal ? "disabled" : "")>
+                                                Створити
+                                            </button>
+                                        </div>
+                                    </th>
 
+                                    @* ДАЛЕЕ — существующие колонки (могут быть несколько на одну дату) *@
                                     @foreach (var column in Model.JournalColumns)
                                     {
                                         var dateKey = column.Date.ToString("yyyyMMdd");
-                                        var hasTopic = !string.IsNullOrWhiteSpace(column.Topic);
-                                        <th class="text-center align-top">
-                                            <div class="fw-semibold">@column.Topic</div>
-                                            <small class="text-muted d-block">@column.Date.ToString("dd.MM")</small>
-                                            @* Селект показываем только учителю и только если темы ещё нет *@
-                                            @if (Model.Role == "Teacher" && !Model.IsCuratorOnlyForSelectedJournal && !hasTopic)
-                                            {
-                                                <select name="GradesForUpdate.Topics[@dateKey]" class="form-select form-select-sm mt-1">
-                                                    <option value="Лекція">Лекція</option>
-                                                    <option value="Практична робота">Практична робота</option>
-                                                    <option value="Лабораторна робота">Лабораторна робота</option>
-                                                    <option value="Напам'ять">Напам'ять</option>
-                                                    <option value="Зошит/Конспект">Зошит/Конспект</option>
-                                                    <option value="Семінарське заняття">Семінарське заняття</option>
-                                                    <option value="Робота на уроці">Робота на уроці</option>
+                                        var topicKey = MyJournalApp.Pages.JournalColumn.MakeTopicKey(column.Topic);
 
-                                                </select>
-                                            }
+                                        <th class="text-center align-top">
+                                            <div class="d-flex justify-content-between align-items-start gap-2">
+                                                <div class="text-start">
+                                                    <div class="fw-semibold">
+                                                        @(!string.IsNullOrWhiteSpace(column.Topic) ? column.Topic : "—")
+                                                    </div>
+                                                    <small class="text-muted d-block">@column.Date.ToString("dd.MM")</small>
+                                                </div>
+
+                                                @* Кнопка удаления — НЕ form, чтобы не вкладывать формы *@
+                                                @if ((Model.Role == "Admin") || (Model.Role == "Teacher" && !Model.IsCuratorOnlyForSelectedJournal))
+                                                {
+                                                    <button type="button"
+                                                            class="btn btn-sm btn-outline-danger btn-delete-col"
+                                                            title="Видалити колонку"
+                                                            data-datekey="@dateKey"
+                                                            data-topickey="@topicKey">
+                                                        🗑
+                                                    </button>
+                                                }
+                                            </div>
                                         </th>
                                     }
                                 </tr>
                             </thead>
                             <tbody>
+                                @{
+                                    var index = 1;
+                                }
                                 @foreach (var student in Model.Students.OrderBy(s => Model.StudentNames.GetValueOrDefault(s.Id, "—")))
                                 {
                                     var fullName = Model.StudentNames.GetValueOrDefault(student.Id, "—");
                                     <tr>
-                                        <td>@fullName</td>
+                                        <td class="text-center sticky-col sticky-1">@index</td>
+                                        <td class="sticky-col sticky-2">@fullName</td>
+
+                                        @* Пустая ячейка под служебную колонку "Создать" *@
+                                        <td class="text-center text-muted">—</td>
+
                                         @foreach (var column in Model.JournalColumns)
                                         {
+                                            var dateKey = column.Date.ToString("yyyyMMdd");
+                                            var topicKey = MyJournalApp.Pages.JournalColumn.MakeTopicKey(column.Topic);
+
                                             var grade = Model.Grades.FirstOrDefault(g =>
                                             g.StudentId == student.Id &&
-                                            g.Created.Date == column.Date.Date);
+                                            g.Created.Date == column.Date.Date &&
+                                            MyJournalApp.Pages.JournalColumn.MakeTopicKey(g.Comment) == topicKey);
 
-                                            // Для куратора: readonly, если оценку ставил не он
                                             var isOwner = selectedJournal?.TeacherId?.Contains(Model.UserId) == true;
                                             bool isReadOnly = Model.Role == "Teacher" &&
                                             !isOwner &&
                                             grade != null &&
                                             grade.TeacherId != Model.UserId;
 
+                                            var inputName = $"GradesForUpdate.Grades[{student.Id}-{dateKey}-{topicKey}]";
+                                            var presenceInputName = $"GradesForUpdate.Presence[{student.Id}-{dateKey}-{topicKey}]";
+
+                                            var initialVal = grade?.Value;
+                                            var initialStr = initialVal.HasValue ? initialVal.Value.ToString() : "";
+
+                                            string initialPresence = grade?.IsPresent.HasValue == true
+                                            ? (grade.IsPresent.Value ? "true" : "false")
+                                            : "";
 
                                             <td class="text-center">
-                                                @{
-                                                    var dateKey = column.Date.ToString("yyyyMMdd");
-
-                                                    var inputName = $"GradesForUpdate.Grades[{student.Id}-{dateKey}]";
-                                                    var presenceInputName = $"GradesForUpdate.Presence[{student.Id}-{dateKey}]";
-
-                                                    var initialVal = grade?.Value;
-                                                    var initialStr = initialVal.HasValue ? initialVal.Value.ToString() : "";
-
-                                                    string initialPresence = grade?.IsPresent.HasValue == true
-                                                    ? (grade.IsPresent.Value ? "true" : "false")
-                                                    : "";
-                                                }
                                                 <div class="d-flex flex-column gap-1" data-datekey="@dateKey">
-
-                                                    <!-- ВСЕГДА показываем поле оценки -->
                                                     <input type="number"
                                                            class="form-control form-control-sm text-center grade-input"
                                                            data-name="@inputName"
@@ -291,10 +415,12 @@
                                             </td>
                                         }
                                     </tr>
+                                    index++;
                                 }
                             </tbody>
                         </table>
                     </div>
+
                     @if (Model.Role == "Teacher" && !Model.IsCuratorOnlyForSelectedJournal)
                     {
                         <div class="mt-3 d-flex justify-content-end">
@@ -311,7 +437,7 @@ else
     <div class="alert alert-info mt-3">Оберіть журнал для перегляду.</div>
 }
 
-<!-- Модальне вікно створення журналу -->
+<!-- Модалка створення журналу -->
 <div class="modal fade" id="addJournalModal" tabindex="-1" aria-labelledby="addJournalModalLabel" aria-hidden="true">
     <div class="modal-dialog">
         <div class="modal-content">
@@ -319,52 +445,20 @@ else
                 @Html.AntiForgeryToken()
                 <input type="hidden" name="handler" value="CreateJournal" />
                 <div class="modal-body">
-
-                    <!-- 1) Назва -->
                     <div class="mb-3">
                         <label class="form-label">Назва журналу</label>
-                        <input type="text"
-                               name="NewJournal.Name"
-                               class="form-control"
+                        <input type="text" name="NewJournal.Name" class="form-control"
                                placeholder="Напр.: Вища математика — КБ-21 — І семестр" />
                     </div>
                     <div class="mb-3">
                         <label class="form-label">Максимальна оцінка</label>
-                        <input type="number"
-                               name="NewJournal.MaxValue"
-                               class="form-control"
-                               step="1"
-                               min="5"
-                               max="12"
-                               required />
+                        <input type="number" name="NewJournal.MaxValue" class="form-control"
+                               step="1" min="5" max="12" required />
                     </div>
-
-                    <!-- 2) Предмет -->
                     <div class="mb-3">
                         <label class="form-label">Предмет</label>
-                        <select name="NewJournal.Subject" class="form-select" required>
-                            <option>Фізичне виховання</option>
-                            <option>Основи екології</option>
-                            <option>Основи правознавства</option>
-                            <option>Вища математика</option>
-                            <option>Опір матеріалів</option>
-                            <option>Безпека життєдіяльності</option>
-                            <option>ХІМІЯ</option>
-                            <option>Інженерне креслення</option>
-                            <option>Будівельне матеріалознавство</option>
-                            <option>Інженерна геодезія</option>
-                            <option>Електротехніка в будівництві</option>
-                            <option>Будівельні конструкції</option>
-                            <option>Фізичне виховання (заняття в секціях)***</option>
-                            <option>Основи економічної теорії</option>
-                            <option>Культурологія</option>
-                            <option>Теоретична механіка</option>
-                            <option>ФІЗИКА</option>
-                            <option>Історія України</option>
-                        </select>
+                        <input type="text" name="NewJournal.Subject" class="form-control" />
                     </div>
-
-                    <!-- 3) Група -->
                     <div class="mb-3">
                         <label class="form-label">Група</label>
                         <select name="NewJournal.GroupId" class="form-select" required>
@@ -375,8 +469,6 @@ else
                             }
                         </select>
                     </div>
-
-                    <!-- 4) Викладач -->
                     <div class="mb-3">
                         <label class="form-label">Викладач</label>
                         <select name="NewJournal.TeacherId" class="form-select" required>
@@ -396,8 +488,47 @@ else
         </div>
     </div>
 </div>
-
-<!-- Модальне вікно тематичної/підсумкової колонки (залишено без змін) -->
+<!-- Модалка витягу оцінок студента -->
+<div class="modal fade" id="exportStudentGradesModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <form method="post">
+                @Html.AntiForgeryToken()
+                <input type="hidden" name="handler" value="ExportStudentGrades" />
+                <div class="modal-header">
+                    <h5 class="modal-title">Рапортичка оцінок студента</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label class="form-label">Студент</label>
+                        <select name="ExportGrades.StudentId" class="form-select" required>
+                            @foreach (var s in Model.Students.OrderBy(x => Model.StudentNames.GetValueOrDefault(x.Id, "—")))
+                            {
+                                <option value="@s.Id">@Model.StudentNames.GetValueOrDefault(s.Id, "—")</option>
+                            }
+                        </select>
+                    </div>
+                    <div class="row g-2">
+                        <div class="col">
+                            <label class="form-label">Початок</label>
+                            <input type="date" name="ExportGrades.StartDate" class="form-control" value="@DateTime.Today.AddDays(-14).ToString("yyyy-MM-dd")" required />
+                        </div>
+                        <div class="col">
+                            <label class="form-label">Кінець</label>
+                            <input type="date" name="ExportGrades.EndDate" class="form-control" value="@DateTime.Today.ToString("yyyy-MM-dd")" required />
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Скасувати</button>
+                    <button type="submit" class="btn btn-primary">Завантажити Excel</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+<!-- Модалка тематичної/підсумкової колонки -->
 <div class="modal fade" id="addSpecialGradesModal" tabindex="-1">
     <div class="modal-dialog modal-lg">
         <div class="modal-content">
@@ -449,7 +580,6 @@ else
                 </div>
                 <div class="modal-footer">
                     <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Скасувати</button>
-
                     @if (Model.Role == "Teacher" && !Model.IsCuratorOnlyForSelectedJournal)
                     {
                         <button type="submit" class="btn btn-primary">Зберегти колонку</button>
@@ -459,63 +589,73 @@ else
         </div>
     </div>
 </div>
+
 <script>
     document.addEventListener('DOMContentLoaded', function () {
-      document.querySelectorAll('form').forEach(function (form) {
-        form.addEventListener('submit', function () {
-          // Оценки: только изменившиеся
-          form.querySelectorAll('.grade-input').forEach(function (inp) {
-            const initial = (inp.dataset.initial ?? '').trim();
-            const current = (inp.value ?? '').trim();
-            const n = inp.dataset.name;
+        // Существующая логика "отправлять только изменённые" — оставляем
+        document.querySelectorAll('form').forEach(function (form) {
+            form.addEventListener('submit', function () {
+                form.querySelectorAll('.grade-input').forEach(function (inp) {
+                    const initial = (inp.dataset.initial ?? '').trim();
+                    const current = (inp.value ?? '').trim();
+                    const n = inp.dataset.name;
 
-            // readonly поля вообще не отправляем
-            if (inp.hasAttribute('readonly')) {
-              inp.removeAttribute('name');
-              return;
-            }
+                    if (inp.hasAttribute('readonly')) {
+                        inp.removeAttribute('name');
+                        return;
+                    }
+                    if (current === '') {
+                        if (initial === '') {
+                            inp.removeAttribute('name');
+                        } else {
+                            inp.setAttribute('name', n);
+                        }
+                    } else {
+                        if (current === initial) {
+                            inp.removeAttribute('name');
+                        } else {
+                            inp.setAttribute('name', n);
+                        }
+                    }
+                });
 
-            if (current === '') {
-              if (initial === '') {
-                inp.removeAttribute('name'); // пусто было и осталось
-              } else {
-                inp.setAttribute('name', n); // было значение, стало пусто — отправим (удаление)
-              }
-            } else {
-              if (current === initial) {
-                inp.removeAttribute('name'); // не менялось
-              } else {
-                inp.setAttribute('name', n); // изменилось/новое
-              }
-            }
-          });
+                form.querySelectorAll('.presence-select').forEach(function (sel) {
+                    const initial = (sel.dataset.initial ?? '').trim();
+                    const current = (sel.value ?? '').trim();
+                    const n = sel.dataset.name;
 
-          // Темы: пустые — не отправляем
-          form.querySelectorAll('select[name^="GradesForUpdate.Topics["]').forEach(function (sel) {
-            if (!sel.value || sel.value.trim() === '') {
-              sel.removeAttribute('name');
-            }
-          });
-
-          // Присутствие: только изменившиеся
-          form.querySelectorAll('.presence-select').forEach(function (sel) {
-            const initial = (sel.dataset.initial ?? '').trim(); // "", "true", "false"
-            const current = (sel.value ?? '').trim();
-            const n = sel.dataset.name;
-
-            // disabled — не отправляем
-            if (sel.hasAttribute('disabled')) {
-              sel.removeAttribute('name');
-              return;
-            }
-
-            if (current === initial) {
-              sel.removeAttribute('name');  // не менялось — не отправляем
-            } else {
-              sel.setAttribute('name', n);  // изменилось — отправляем
-            }
-          });
+                    if (sel.hasAttribute('disabled')) {
+                        sel.removeAttribute('name');
+                        return;
+                    }
+                    if (current === initial) {
+                        sel.removeAttribute('name');
+                    } else {
+                        sel.setAttribute('name', n);
+                    }
+                });
+            });
         });
-      });
+
+        // Обработчик удаления колонки через скрытую форму
+        document.addEventListener('click', function (e) {
+            const btn = e.target.closest('.btn-delete-col');
+            if (!btn) return;
+
+            if (!confirm('Видалити цю колонку? Усі оцінки в ній буде видалено.')) return;
+
+            const dateKey = btn.getAttribute('data-datekey');
+            const topicKey = btn.getAttribute('data-topickey');
+
+            const dateInput = document.getElementById('del_DateKey');
+            const topicInput = document.getElementById('del_TopicKey');
+            const form = document.getElementById('deleteColForm');
+
+            if (dateInput && topicInput && form) {
+                dateInput.value = dateKey || '';
+                topicInput.value = topicKey || '';
+                form.submit();
+            }
+        });
     });
 </script>

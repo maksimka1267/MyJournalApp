@@ -163,4 +163,44 @@ public class UserController : ControllerBase
         var student = await _studentRepository.GetByIdAsync(id);
         return student is null ? NotFound() : Ok(student);
     }
+    // UserController.cs (добавить в класс)
+    [Authorize]
+    [HttpPut("update-basic")]
+    public async Task<IActionResult> UpdateBasic([FromBody] UpdateUserBasicDto dto)
+    {
+        if (dto.UserId == Guid.Empty)
+            return BadRequest("UserId is required.");
+
+        var user = await _userRepository.GetByIdAsync(dto.UserId);
+        if (user is null) return NotFound();
+
+        bool changed = false;
+
+        if (!string.IsNullOrWhiteSpace(dto.FullName) && dto.FullName != user.FullName)
+        {
+            user.FullName = dto.FullName.Trim();
+            changed = true;
+        }
+
+        if (!string.IsNullOrWhiteSpace(dto.Email) && dto.Email != user.Email)
+        {
+            user.Email = dto.Email.Trim();
+            changed = true;
+        }
+
+        if (changed)
+        {
+            await _userRepository.Update(user);
+            await _userRepository.SaveChangesAsync();
+        }
+
+        return Ok(user);
+    }
+
+    public class UpdateUserBasicDto
+    {
+        public Guid UserId { get; set; }
+        public string? FullName { get; set; }
+        public string? Email { get; set; }
+    }
 }

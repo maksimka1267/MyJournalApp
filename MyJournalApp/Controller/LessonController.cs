@@ -1,6 +1,9 @@
 ﻿using ClosedXML.Excel;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using MyJournalApp.Interface;
+using MyJournalApp.Repository;
+
 [ApiController]
 [Route("api/[controller]")]
 public class LessonController : ControllerBase
@@ -21,6 +24,7 @@ public class LessonController : ControllerBase
         _groupRepository = groupRepository;
     }
 
+    [Authorize]
     [HttpGet]
     public async Task<IActionResult> GetAll()
     {
@@ -28,6 +32,7 @@ public class LessonController : ControllerBase
         return Ok(lessons);
     }
 
+    [Authorize]
     [HttpGet("{id}")]
     public async Task<IActionResult> GetById(Guid id)
     {
@@ -36,6 +41,7 @@ public class LessonController : ControllerBase
         return Ok(lesson);
     }
 
+    [Authorize]
     [HttpGet("group/{groupId}")]
     public async Task<IActionResult> GetByGroup(Guid groupId)
     {
@@ -43,25 +49,84 @@ public class LessonController : ControllerBase
         return Ok(lessons);
     }
 
+    [Authorize]
     [HttpGet("group/{groupId}/date/{date}")]
     public async Task<IActionResult> GetByGroupAndDate(Guid groupId, DateTime date)
     {
-
         var lessons = await _lessonRepository.GetLessonsByDateAsync(groupId, date);
         return Ok(lessons);
     }
 
+    [Authorize]
     [HttpPost]
-    public async Task<IActionResult> Create(Lesson lesson)
+    public async Task<IActionResult> Create([FromBody] CreateLessonRequest req)
     {
-        if (!ModelState.IsValid)
-            return BadRequest(ModelState);
+        if (!ModelState.IsValid) return BadRequest(ModelState);
+        if (req.GroupId == Guid.Empty || req.TeacherId == Guid.Empty)
+            return BadRequest("Потрібні GroupId та TeacherId.");
+        if (req.StartTime == default)
+            return BadRequest("Потрібна дата/час початку.");
 
-        await _lessonRepository.AddAsync(lesson);
+        var baseLesson = new Lesson
+        {
+            Id = req.Id == Guid.Empty ? Guid.NewGuid() : req.Id,
+            GroupId = req.GroupId,
+            TeacherId = req.TeacherId,
+            Name = req.Name ?? "",
+            Topic = req.Topic ?? "",
+            Homework = req.Homework ?? "",
+            StartTime = req.StartTime,
+            Clocks = null
+        };
+
+        // одиночный урок
+        if (!req.RepeatWeekly || !req.EndDate.HasValue || req.EndDate.Value.Date < req.StartTime.Date)
+        {
+            await _lessonRepository.AddAsync(baseLesson);
+            await _lessonRepository.SaveChangesAsync();
+            return CreatedAtAction(nameof(GetById), new { id = baseLesson.Id }, baseLesson);
+        }
+
+        // серия по дню недели StartTime — щотижня до EndDate (включно)
+        var list = new List<Lesson>();
+        var startDate = req.StartTime.Date;
+        var endDate = req.EndDate.Value.Date;
+        var timeOfDay = req.StartTime.TimeOfDay;
+        var dayOfWeek = req.StartTime.DayOfWeek;
+
+        // первое попадание нужного дня недели
+        var cursor = startDate;
+        while (cursor.DayOfWeek != dayOfWeek) cursor = cursor.AddDays(1);
+
+        for (var d = cursor; d <= endDate; d = d.AddDays(7))
+        {
+            list.Add(new Lesson
+            {
+                Id = Guid.NewGuid(),
+                GroupId = req.GroupId,
+                TeacherId = req.TeacherId,
+                Name = req.Name ?? "",
+                Topic = req.Topic ?? "",
+                Homework = req.Homework ?? "",
+                StartTime = d + timeOfDay,
+                Clocks = null
+            });
+        }
+
+        if (list.Count == 0)
+        {
+            await _lessonRepository.AddAsync(baseLesson);
+            await _lessonRepository.SaveChangesAsync();
+            return CreatedAtAction(nameof(GetById), new { id = baseLesson.Id }, baseLesson);
+        }
+
+        await _lessonRepository.AddRangeAsync(list);
         await _lessonRepository.SaveChangesAsync();
-        return CreatedAtAction(nameof(GetById), new { id = lesson.Id }, lesson);
+
+        return Ok(new { Created = list.Count, FirstId = list.First().Id });
     }
 
+    [Authorize]
     [HttpPut("{id}")]
     public async Task<IActionResult> Update(Guid id, [FromBody] Lesson updated)
     {
@@ -71,61 +136,60 @@ public class LessonController : ControllerBase
         var existing = await _lessonRepository.GetByIdAsync(id);
         if (existing == null) return NotFound();
 
-        existing.Name = updated.Name;
-        existing.GroupId = updated.GroupId;
-        existing.TeacherId = updated.TeacherId;
-        existing.Topic = updated.Topic;
-        existing.Homework = updated.Homework;
-        existing.StartTime = updated.StartTime;
-        existing.Clocks = updated.Clocks;
+        if (!string.IsNullOrWhiteSpace(updated.Name))
+            existing.Name = updated.Name;
+
+        if (updated.GroupId != Guid.Empty && updated.GroupId != existing.GroupId)
+            existing.GroupId = updated.GroupId;
+
+        if (updated.TeacherId != Guid.Empty)
+            existing.TeacherId = updated.TeacherId;
+
+        // Second teacher: Guid.Empty → снять
+        if (updated.SecondTeacherId.HasValue)
+            existing.SecondTeacherId = updated.SecondTeacherId == Guid.Empty ? (Guid?)null : updated.SecondTeacherId;
+
+        // null — не трогаем; "" — очистить
+        if (updated.Topic != null)
+            existing.Topic = updated.Topic;
+
+        if (updated.Homework != null)
+            existing.Homework = updated.Homework;
+
+        if (updated.Clocks.HasValue)
+            existing.Clocks = updated.Clocks;
+
+        if (updated.StartTime != default)
+            existing.StartTime = updated.StartTime;
+
         await _lessonRepository.Update(existing);
+        await _lessonRepository.SaveChangesAsync();
+
         return NoContent();
     }
+
+    [Authorize]
     [HttpPost("import")]
     public async Task<IActionResult> ImportLessons([FromForm] ImportLessonsDto dto)
     {
-        var file = dto.File;
-        if (file == null || file.Length == 0)
+        if (dto.File == null || dto.File.Length == 0)
             return BadRequest("Файл порожній");
 
-        // Шаг 1: Определение начала семестра на основе текущей даты
-        var today = DateTime.Today;
-        var semesterStart = today;
+        // 1) Границы семестра
+        var (semesterStart, semesterEnd) = GetSemesterBounds(DateTime.Today);
 
-        // Если текущая дата до 1 сентября, начало семестра - 1 сентября текущего года
-        if (today.Month < 9)
-        {
-            semesterStart = new DateTime(today.Year, 9, 1);
-        }
-        // Если текущая дата после 1 января, но до 1 сентября,
-        // начало семестра - 1 января текущего года
-        else if (today.Month > 1) // Это условие уже не нужно, но для ясности оставим
-        {
-            // Логика остается прежней - берем текущий год
-        }
-        else if (today.Month < 1) // На самом деле это условие никогда не сработает, так как today всегда будет > 0
-        {
-            semesterStart = new DateTime(today.Year, 1, 1);
-        }
-
-        // Если текущая дата до 1 января, начало семестра - 1 января текущего года
-        if (today < new DateTime(today.Year, 1, 1))
-        {
-            semesterStart = new DateTime(today.Year, 1, 1);
-        }
-
-        // Теперь находим первый понедельник, который равен или больше semesterStart
-        while (semesterStart.DayOfWeek != DayOfWeek.Monday)
-            semesterStart = semesterStart.AddDays(1);
-
-        // Удаляем только старое расписание для нужного типа недели
+        // 2) Удаляем старое расписание внутри семестра для выбранной парности
         var allExistingLessons = await _lessonRepository.GetLessonsByGroupIdAsync(dto.GroupId);
 
-        var lessonsToDelete = allExistingLessons.Where(l => {
-            int weekNumber = (int)Math.Floor((l.StartTime.Date - semesterStart.Date).TotalDays / 7);
-            bool isNumeratorWeek = weekNumber % 2 == 0;
-            return isNumeratorWeek == dto.IsNumerator;
-        }).ToList();
+        var lessonsToDelete = allExistingLessons
+            .Where(l => l.StartTime.Date >= semesterStart.Date && l.StartTime.Date <= semesterEnd.Date)
+            .Where(l =>
+            {
+                int weekNumber = (int)Math.Floor((l.StartTime.Date - semesterStart.Date).TotalDays / 7.0);
+                bool isNumeratorWeek = (weekNumber % 2) == 0;
+                return isNumeratorWeek == dto.IsNumerator;
+            })
+            .ToList();
 
         if (lessonsToDelete.Any())
         {
@@ -133,134 +197,423 @@ public class LessonController : ControllerBase
             await _lessonRepository.SaveChangesAsync();
         }
 
+        // 3) Чтение Excel
         using var stream = new MemoryStream();
-        await file.CopyToAsync(stream);
+        await dto.File.CopyToAsync(stream);
+        stream.Position = 0;
         using var workbook = new XLWorkbook(stream);
         var worksheet = workbook.Worksheets.First();
 
-        // Находим колонки с днями недели (эта логика остается)
-        var dayColumns = new Dictionary<string, int>();
-        var daysRowIndex = 4;
-        for (int col = 3; col <= worksheet.LastColumnUsed().ColumnNumber(); col++)
-        {
-            var day = worksheet.Cell(daysRowIndex, col).GetString().Trim();
-            if (!string.IsNullOrEmpty(day))
-                dayColumns[day] = col;
-        }
+        // Строка названий дней
+        var dayColumns = ParseDayColumns(worksheet, 4);
 
-        // ▼▼▼ НАЧАЛО НОВОЙ ЛОГИКИ ▼▼▼
+        // 4) Поиск секций ЧИСЕЛЬНИК / ЗНАМЕННИК
+        var (numeratorRow, denominatorRow, lastRow) = FindSectionRows(worksheet);
 
-        // Шаг 2: Находим строки, где начинаются секции "ЧИСЕЛЬНИК" и "ЗНАМЕННИК"
-        int numeratorDataStartRow = 0;
-        int denominatorDataStartRow = 0;
-        int lastRow = worksheet.LastRowUsed().RowNumber();
-
-        for (int r = 1; r <= lastRow; r++)
-        {
-            // Ищем заголовки секций во второй колонке (B)
-            var headerCell = worksheet.Cell(r, 2).GetString().Trim();
-            if (headerCell.Equals("ЧИСЕЛЬНИК", StringComparison.OrdinalIgnoreCase))
-            {
-                numeratorDataStartRow = r + 1; // Данные начинаются со следующей строки
-            }
-            else if (headerCell.Equals("ЗНАМЕННИК", StringComparison.OrdinalIgnoreCase))
-            {
-                denominatorDataStartRow = r + 1;
-            }
-        }
-
-        // Шаг 3: Определяем, какой диапазон строк нужно читать
-        int startRow;
-        int endRow;
-
+        int startRow, endRow;
         if (dto.IsNumerator)
         {
-            if (numeratorDataStartRow == 0) return BadRequest("Секція 'ЧИСЕЛЬНИК' не знайдена у файлі.");
-            startRow = numeratorDataStartRow;
-            // Конец секции - это либо начало знаменателя, либо конец файла
-            endRow = (denominatorDataStartRow != 0) ? denominatorDataStartRow - 2 : lastRow;
+            if (numeratorRow == 0) return BadRequest("Секція 'ЧИСЕЛЬНИК' не знайдена у файлі.");
+            startRow = numeratorRow;
+            endRow = (denominatorRow != 0) ? denominatorRow - 2 : lastRow;
         }
-        else // Импортируем знаменатель
+        else
         {
-            if (denominatorDataStartRow == 0) return BadRequest("Секція 'ЗНАМЕННИК' не знайдена у файлі.");
-            startRow = denominatorDataStartRow;
+            if (denominatorRow == 0) return BadRequest("Секція 'ЗНАМЕННИК' не знайдена у файлі.");
+            startRow = denominatorRow;
             endRow = lastRow;
         }
 
+        // 5) Парсинг строк выбранной секции
         var lessons = new List<Lesson>();
         string currentPairNum = "";
 
-        // Шаг 4: Читаем данные только из нужного диапазона строк
         for (int row = startRow; row <= endRow; row++)
         {
             var pairCell = worksheet.Cell(row, 2).GetString().Trim();
             if (!string.IsNullOrEmpty(pairCell))
-            {
                 currentPairNum = pairCell;
-            }
-            if (string.IsNullOrEmpty(currentPairNum) || currentPairNum.Equals("ПАРА", StringComparison.OrdinalIgnoreCase)) continue;
+
+            if (string.IsNullOrEmpty(currentPairNum) ||
+                currentPairNum.Equals("ПАРА", StringComparison.OrdinalIgnoreCase))
+                continue;
 
             foreach (var (day, col) in dayColumns)
             {
                 var cellValue = worksheet.Cell(row, col).GetString().Trim();
                 if (string.IsNullOrEmpty(cellValue) || cellValue == "_") continue;
 
-                var lines = cellValue.Split('\n', StringSplitOptions.RemoveEmptyEntries);
-                if (lines.Length < 2) continue; // Пропускаем, если нет и предмета, и преподавателя
-
-                string subject = lines[0].Trim();
-                string teacher = lines[1].Trim();
-
-                if (!TryGetLessonStartTime(currentPairNum, out TimeOnly start)) continue;
-
-                var dayOfWeek = day switch
-                {
-                    "ПОНЕДІЛОК" => DayOfWeek.Monday,
-                    "ВІВТОРОК" => DayOfWeek.Tuesday,
-                    "СЕРЕДА" => DayOfWeek.Wednesday,
-                    "ЧЕТВЕР" => DayOfWeek.Thursday,
-                    "П'ЯТНИЦЯ" => DayOfWeek.Friday,
-                    _ => DayOfWeek.Monday
-                };
-
-                // Шаг 5: Создаем уроки для нужных недель (четных или нечетных)
-                for (int week = 0; week < 18; week++)
-                {
-                    bool isNumeratorWeek = week % 2 == 0;
-
-                    // Создаем урок, только если тип недели совпадает с запросом
-                    if ((dto.IsNumerator && isNumeratorWeek) || (!dto.IsNumerator && !isNumeratorWeek))
-                    {
-                        var teacherId = await _teacherRepository.GetTeacherIdByFullNameAsync(teacher);
-                        var baseDate = semesterStart.AddDays(week * 7);
-                        var lessonDate = baseDate;
-                        while (lessonDate.DayOfWeek != dayOfWeek)
-                            lessonDate = lessonDate.AddDays(1);
-                        var startDateTime = lessonDate.Date + start.ToTimeSpan();
-
-                        lessons.Add(new Lesson
-                        {
-                            Id = Guid.NewGuid(),
-                            Name = subject,
-                            TeacherId = teacherId ?? Guid.Empty,
-                            GroupId = dto.GroupId,
-                            Topic = "",
-                            Homework = "",
-                            StartTime = startDateTime
-                        });
-                    }
-                }
+                var lessonsFromCell = await ParseCell(
+                    cellValue, dto, semesterStart, semesterEnd, currentPairNum, day);
+                lessons.AddRange(lessonsFromCell);
             }
         }
 
-        // Шаг 6: Сохраняем результат
-        await _lessonRepository.AddRangeAsync(lessons); // Используем AddRangeAsync для эффективности
-        await _lessonRepository.SaveChangesAsync();
+        // 6) Сохраняем
+        if (lessons.Count > 0)
+        {
+            await _lessonRepository.AddRangeAsync(lessons);
+            await _lessonRepository.SaveChangesAsync();
+        }
 
         return Ok(new { Count = lessons.Count });
     }
 
-    // Метод TryGetLessonStartTime остается без изменений
+    /* ====================== BULK-APPLY (fixed for subgroups) ====================== */
+
+    public class BulkApplyDto
+    {
+        public List<BulkApplyLessonDto> Lessons { get; set; } = new();
+        public DateTime StartDate { get; set; }
+        public DateTime EndDate { get; set; }
+    }
+
+    public class BulkApplyLessonDto
+    {
+        public Guid Id { get; set; }
+        public Guid GroupId { get; set; }
+        public DateTime StartTime { get; set; }
+
+        public string? Name { get; set; }
+        public string? Topic { get; set; }
+        public string? Homework { get; set; }
+        public int? Clocks { get; set; }
+        public Guid TeacherId { get; set; }
+        public Guid? SecondTeacherId { get; set; }
+
+        public bool Delete { get; set; }
+    }
+
+    // Подпись слота исходного (базового) урока
+    private sealed class SlotSignature
+    {
+        public TimeSpan Time { get; init; }
+        public string Name { get; init; } = "";
+        public Guid TeacherId { get; init; }
+        public Guid? SecondTeacherId { get; init; }
+
+        public static SlotSignature From(Lesson l) => new()
+        {
+            Time = l.StartTime.TimeOfDay,
+            Name = l.Name ?? "",
+            TeacherId = l.TeacherId,
+            SecondTeacherId = NormalizeSecond(l.SecondTeacherId)
+        };
+
+        public bool Matches(Lesson l)
+        {
+            var lT2 = NormalizeSecond(l.SecondTeacherId);
+            return l.StartTime.TimeOfDay == Time
+                && string.Equals(l.Name ?? "", Name, StringComparison.Ordinal)
+                && l.TeacherId == TeacherId
+                && lT2 == SecondTeacherId;
+        }
+
+        private static Guid? NormalizeSecond(Guid? g) =>
+            g.HasValue && g.Value != Guid.Empty ? g : null;
+    }
+
+    private sealed class SlotChanges
+    {
+        public SlotSignature Signature { get; init; } = null!;
+        public BulkApplyLessonDto? NewValues { get; init; }
+        public bool Delete { get; init; }
+
+        public bool SetName { get; set; }
+        public bool SetTeacherId { get; set; }
+        public bool SetSecondTeacherId { get; set; }
+        public bool SetTopic { get; set; }
+        public bool SetHomework { get; set; }
+        public bool SetClocks { get; set; }
+        public bool HasAny =>
+            SetName || SetTeacherId || SetSecondTeacherId || SetTopic || SetHomework || SetClocks;
+    }
+
+    [Authorize(Roles = "Admin")]
+    [HttpPost("bulk-apply")]
+    public async Task<IActionResult> BulkApply([FromBody] BulkApplyDto dto)
+    {
+        if (dto == null || dto.Lessons == null || dto.Lessons.Count == 0)
+            return BadRequest("Порожній пакет уроків.");
+
+        var start = dto.StartDate.Date;
+        var end = dto.EndDate.Date;
+        if (end < start) return BadRequest("Кінцева дата раніше за початкову.");
+
+        var groupIds = dto.Lessons.Select(l => l.GroupId).Distinct().ToList();
+        if (groupIds.Count != 1) return BadRequest("Усі уроки мають бути однієї групи.");
+        var groupId = groupIds[0];
+
+        // Базовый день: реальная точка опоры
+        var baselineOldList = (await _lessonRepository.GetLessonsByDateAsync(groupId, start))?.ToList()
+                              ?? new List<Lesson>();
+        var baselineById = baselineOldList.ToDictionary(l => l.Id, l => l);
+
+        // Готовим маски изменений, исходя из конкретных baseline-Id
+        var changes = new List<SlotChanges>();
+
+        foreach (var newL in dto.Lessons)
+        {
+            if (!baselineById.TryGetValue(newL.Id, out var oldL))
+            {
+                // В базовый день нет такого слота — пропускаем
+                continue;
+            }
+
+            var ch = new SlotChanges
+            {
+                Signature = SlotSignature.From(oldL), // подпись ДО изменений
+                NewValues = newL,
+                Delete = newL.Delete
+            };
+
+            if (!ch.Delete)
+            {
+                if (!string.Equals(oldL.Name ?? "", newL.Name ?? "", StringComparison.Ordinal)) ch.SetName = true;
+                if (oldL.TeacherId != newL.TeacherId) ch.SetTeacherId = true;
+
+                var oldT2 = SlotSignature.From(oldL).SecondTeacherId;
+                var newT2 = newL.SecondTeacherId.HasValue && newL.SecondTeacherId != Guid.Empty ? newL.SecondTeacherId : null;
+                if (oldT2 != newT2) ch.SetSecondTeacherId = true;
+
+                if (!string.Equals(oldL.Topic ?? "", newL.Topic ?? "", StringComparison.Ordinal)) ch.SetTopic = true;
+                if (!string.Equals(oldL.Homework ?? "", newL.Homework ?? "", StringComparison.Ordinal)) ch.SetHomework = true;
+                if (oldL.Clocks != newL.Clocks) ch.SetClocks = true;
+            }
+
+            if (ch.Delete || ch.HasAny)
+                changes.Add(ch);
+        }
+
+        if (changes.Count == 0)
+            return Ok(new { Updated = 0, Deleted = 0 });
+
+        int updated = 0, deleted = 0;
+
+        // Идём неделями
+        for (var d = start; d <= end; d = d.AddDays(7))
+        {
+            var dayLessons = (await _lessonRepository.GetLessonsByDateAsync(groupId, d))?.ToList();
+            if (dayLessons == null || dayLessons.Count == 0) continue;
+
+            foreach (var ch in changes)
+            {
+                // Ищем слот по подписи (старое состояние)
+                var target = dayLessons.FirstOrDefault(l => ch.Signature.Matches(l));
+                if (target == null) continue;
+
+                if (ch.Delete)
+                {
+                    await _lessonRepository.Delete(target);
+                    deleted++;
+                    continue;
+                }
+
+                var nv = ch.NewValues!;
+                if (ch.SetName) target.Name = nv.Name;
+                if (ch.SetTeacherId) target.TeacherId = nv.TeacherId;
+                if (ch.SetSecondTeacherId)
+                    target.SecondTeacherId = (nv.SecondTeacherId.HasValue && nv.SecondTeacherId != Guid.Empty) ? nv.SecondTeacherId : null;
+                if (ch.SetTopic) target.Topic = nv.Topic;
+                if (ch.SetHomework) target.Homework = nv.Homework;
+                if (ch.SetClocks) target.Clocks = nv.Clocks;
+
+                await _lessonRepository.Update(target);
+                updated++;
+            }
+        }
+
+        await _lessonRepository.SaveChangesAsync();
+        return Ok(new { Updated = updated, Deleted = deleted });
+    }
+
+    /* ====================== ВСПОМОГАТЕЛЬНЫЕ МЕТОДЫ ====================== */
+
+    // Границы семестра.
+    // • Июль–Ноябрь  -> 1-й семестр текущего года: 1.09.Y..31.12.Y
+    // • Декабрь/Январь -> 2-й семестр след. года: 1.01.(Y+1)..30.06.(Y+1)
+    // • Февраль–Июнь -> 2-й семестр текущего года: 1.01.Y..30.06.Y
+    private (DateTime start, DateTime end) GetSemesterBounds(DateTime now)
+    {
+        int y = now.Year;
+
+        if (now.Month >= 7 && now.Month <= 11)
+        {
+            var start = new DateTime(y, 9, 1);
+            var end = new DateTime(y, 12, 31, 23, 59, 59);
+            return (ShiftToMonday(start), end);
+        }
+        else if (now.Month == 12 || now.Month == 1)
+        {
+            var start = new DateTime(y + 1, 1, 1);
+            var end = new DateTime(y + 1, 6, 30, 23, 59, 59);
+            return (ShiftToMonday(start), end);
+        }
+        else
+        {
+            var start = new DateTime(y, 1, 1);
+            var end = new DateTime(y, 6, 30, 23, 59, 59);
+            return (ShiftToMonday(start), end);
+        }
+    }
+
+    private DateTime ShiftToMonday(DateTime d)
+    {
+        while (d.DayOfWeek != DayOfWeek.Monday) d = d.AddDays(1);
+        return d;
+    }
+
+    private (int numeratorRow, int denominatorRow, int lastRow) FindSectionRows(IXLWorksheet worksheet)
+    {
+        int numeratorDataStartRow = 0;
+        int denominatorDataStartRow = 0;
+        int lastRow = worksheet.LastRowUsed().RowNumber();
+
+        for (int r = 1; r <= lastRow; r++)
+        {
+            var headerCell = worksheet.Cell(r, 2).GetString().Trim();
+            if (headerCell.Equals("ЧИСЕЛЬНИК", StringComparison.OrdinalIgnoreCase))
+                numeratorDataStartRow = r + 1;
+            else if (headerCell.Equals("ЗНАМЕННИК", StringComparison.OrdinalIgnoreCase))
+                denominatorDataStartRow = r + 1;
+        }
+
+        return (numeratorDataStartRow, denominatorDataStartRow, lastRow);
+    }
+
+    private Dictionary<string, int> ParseDayColumns(IXLWorksheet worksheet, int daysRowIndex)
+    {
+        var dayColumns = new Dictionary<string, int>();
+        for (int col = 3; col <= worksheet.LastColumnUsed().ColumnNumber(); col++)
+        {
+            var day = worksheet.Cell(daysRowIndex, col).GetString().Trim();
+            if (!string.IsNullOrEmpty(day))
+                dayColumns[day] = col;
+        }
+        return dayColumns;
+    }
+
+    private async Task<IEnumerable<Lesson>> ParseCell(
+        string cellValue,
+        ImportLessonsDto dto,
+        DateTime semesterStart,
+        DateTime semesterEnd,
+        string pairNum,
+        string day)
+    {
+        var result = new List<Lesson>();
+
+        var lines = cellValue.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        if (lines.Length < 2) return result;
+
+        var subjects = lines[0].Split(',', StringSplitOptions.RemoveEmptyEntries).Select(s => s.Trim()).ToArray();
+        var teachers = lines[1].Split(',', StringSplitOptions.RemoveEmptyEntries).Select(s => s.Trim()).ToArray();
+
+        var dayOfWeek = day switch
+        {
+            "ПОНЕДІЛОК" => DayOfWeek.Monday,
+            "ВІВТОРОК" => DayOfWeek.Tuesday,
+            "СЕРЕДА" => DayOfWeek.Wednesday,
+            "ЧЕТВЕР" => DayOfWeek.Thursday,
+            "П'ЯТНИЦЯ" => DayOfWeek.Friday,
+            _ => DayOfWeek.Monday
+        };
+
+        // 1) два предмета и два учителя → по одному Lesson на каждого
+        if (subjects.Length > 1 && subjects.Length == teachers.Length)
+        {
+            for (int i = 0; i < subjects.Length; i++)
+                result.AddRange(await CreateLessonsForWeeks(
+                    subjects[i], teachers[i], null, dto, semesterStart, semesterEnd, pairNum, dayOfWeek));
+        }
+        // 2) один предмет, несколько учителей → делим на два Lesson (для подгрупп)
+        else if (subjects.Length == 1 && teachers.Length > 1)
+        {
+            string subj = subjects[0];
+            for (int i = 0; i < teachers.Length; i++)
+                result.AddRange(await CreateLessonsForWeeks(
+                    subj, teachers[i], null, dto, semesterStart, semesterEnd, pairNum, dayOfWeek));
+        }
+        // 3) обычный случай
+        else
+        {
+            result.AddRange(await CreateLessonsForWeeks(
+                subjects[0], teachers.First(), null, dto, semesterStart, semesterEnd, pairNum, dayOfWeek));
+        }
+
+        return result;
+    }
+
+    private async Task<IEnumerable<Lesson>> CreateLessonsForWeeks(
+        string subject,
+        string teacher1,
+        string? teacher2,
+        ImportLessonsDto dto,
+        DateTime semesterStart,
+        DateTime semesterEnd,
+        string pairNum,
+        DayOfWeek dayOfWeek)
+    {
+        var result = new List<Lesson>();
+        if (!TryGetLessonStartTime(pairNum, out TimeOnly start)) return result;
+
+        // Сдвиг дня в рамках недели (от понедельника)
+        int offset = ((int)dayOfWeek - (int)DayOfWeek.Monday + 7) % 7;
+
+        for (int week = 0; week < 18; week++)
+        {
+            var weekStart = semesterStart.AddDays(week * 7);
+            if (weekStart.Date > semesterEnd.Date) break;
+
+            bool isNumeratorWeek = (week % 2) == 0;
+            if (!((dto.IsNumerator && isNumeratorWeek) || (!dto.IsNumerator && !isNumeratorWeek)))
+                continue;
+
+            var lessonDate = weekStart.AddDays(offset);
+            if (lessonDate.Date > semesterEnd.Date) break;
+
+            var teacherId1 = await _teacherRepository.GetTeacherIdByFullNameAsync(teacher1);
+
+            var startDateTime = lessonDate.Date + start.ToTimeSpan();
+
+            // Первый учитель (отдельный Lesson)
+            result.Add(new Lesson
+            {
+                Id = Guid.NewGuid(),
+                Name = subject,
+                TeacherId = teacherId1 ?? Guid.Empty,
+                GroupId = dto.GroupId,
+                Topic = "",
+                Homework = "",
+                StartTime = startDateTime,
+                Clocks = null
+            });
+
+            // Если второй указан — создаём еще один Lesson (вторая подгруппа)
+            if (!string.IsNullOrWhiteSpace(teacher2))
+            {
+                var teacherId2 = await _teacherRepository.GetTeacherIdByFullNameAsync(teacher2);
+                if (teacherId2.HasValue && teacherId2.Value != Guid.Empty)
+                {
+                    result.Add(new Lesson
+                    {
+                        Id = Guid.NewGuid(),
+                        Name = subject,
+                        TeacherId = teacherId2.Value,
+                        GroupId = dto.GroupId,
+                        Topic = "",
+                        Homework = "",
+                        StartTime = startDateTime,
+                        Clocks = null
+                    });
+                }
+            }
+        }
+
+        return result;
+    }
+
+    // Мапа начала пары
     private bool TryGetLessonStartTime(string pairNumRaw, out TimeOnly start)
     {
         start = pairNumRaw switch
@@ -270,18 +623,22 @@ public class LessonController : ControllerBase
             "3" => new TimeOnly(11, 20),
             "4" => new TimeOnly(12, 30),
             "5" => new TimeOnly(13, 40),
+            "6" => new TimeOnly(14, 50),
+            "7" => new TimeOnly(16, 0),
+            "8" => new TimeOnly(17, 10),
             _ => default
         };
-
-        return pairNumRaw is "1" or "2" or "3" or "4" or "5";
+        return start != default;
     }
+
     public class ImportLessonsDto
     {
-        public IFormFile File { get; set; }
+        public IFormFile File { get; set; } = null!;
         public Guid GroupId { get; set; }
         public bool IsNumerator { get; set; } // true - для числителя, false - для знаменателя
     }
 
+    [Authorize]
     [HttpDelete("{id}")]
     public async Task<IActionResult> Delete(Guid id)
     {
@@ -289,43 +646,56 @@ public class LessonController : ControllerBase
         if (existing == null) return NotFound();
 
         await _lessonRepository.Delete(existing);
+        await _lessonRepository.SaveChangesAsync();
         return NoContent();
     }
+
+    [Authorize(Roles = "Admin")]
+    [HttpGet("group/{groupId}/subjects")]
+    public async Task<IActionResult> GetSubjectsByGroup(Guid groupId)
+    {
+        var lessons = await _lessonRepository.GetLessonsByGroupIdAsync(groupId);
+
+        var subjects = lessons
+            .Select(l => l.Name)
+            .Where(n => !string.IsNullOrWhiteSpace(n))
+            .Distinct()
+            .OrderBy(n => n)
+            .ToList();
+
+        return Ok(subjects);
+    }
+
+    [Authorize]
     [HttpGet("export")]
     public async Task<IActionResult> ExportToExcel([FromQuery] ExportDto dto)
     {
-        // 1. Проверяем, были ли переданы обязательные для поиска параметры
         if (!dto.TeacherId.HasValue || !dto.StartDate.HasValue || !dto.EndDate.HasValue)
         {
             return BadRequest("Необходимо указать преподавателя и полный период (начальная и конечная даты) для формирования отчета.");
         }
 
-        // 2. Вызываем ваш существующий метод репозитория
         var filteredLessons = await _lessonRepository.GetByTeacherAsync(
             dto.TeacherId.Value,
             dto.StartDate.Value,
             dto.EndDate.Value,
-            dto.GroupId,         // Передаем как есть (может быть null)
-            dto.SubjectName      // Передаем как есть (может быть null)
+            dto.GroupId,
+            dto.SubjectName
         );
 
-        // GetByTeacherAsync возвращает List<Lesson>, поэтому можно проверить через .Count
         if (filteredLessons.Count == 0)
         {
             return NotFound("Нет уроков, соответствующих вашим критериям.");
         }
 
-        // 3. Создаем Excel-файл (этот блок кода остается без изменений)
         using (var workbook = new XLWorkbook())
         {
             var worksheet = workbook.Worksheets.Add("Звіт по годинах");
 
-            // --- Заголовки документа ---
             var firstLesson = filteredLessons.First();
             string groupNameForHeader = "Всі групи";
             Guid? effectiveGroupId = dto.GroupId;
 
-            // если группу не передали, но все уроки одной группы — покажем её имя
             if (!effectiveGroupId.HasValue)
             {
                 var distinctGroups = filteredLessons.Select(l => l.GroupId).Distinct().ToList();
@@ -337,10 +707,9 @@ public class LessonController : ControllerBase
                 groupNameForHeader = group?.Name ?? "Невідома група";
             }
 
-            // Вам понадобятся репозитории для получения имен по ID
             var teacher = await _teacherRepository.GetByIdAsync(firstLesson.TeacherId);
-            // var group = await _groupRepository.GetByIdAsync(firstLesson.GroupId);
             var user = await _userRepository.GetByIdAsync(firstLesson.TeacherId);
+
             worksheet.Cell("D2").Value = "Група:";
             worksheet.Cell("E2").Value = groupNameForHeader;
             worksheet.Cell("D4").Value = "Дисципліна:";
@@ -348,7 +717,7 @@ public class LessonController : ControllerBase
             worksheet.Cell("D6").Value = "П.І.Б. викладача:";
             worksheet.Cell("E6").Value = user?.FullName ?? "Невідомий";
 
-            // --- Заголовки таблицы ---
+            // Заголовки таблицы
             var headerRow = 9;
             worksheet.Cell(headerRow, 1).Value = "Дата занять";
             worksheet.Cell(headerRow, 2).Value = "№ з/п";
@@ -357,7 +726,7 @@ public class LessonController : ControllerBase
             worksheet.Range(headerRow, 1, headerRow, 4).Style.Font.SetBold();
             worksheet.Range(headerRow, 1, headerRow, 4).Style.Fill.SetBackgroundColor(XLColor.LightGray);
 
-            // --- Заполнение данными ---
+            // Данные
             int currentRow = headerRow + 1;
             int lessonNumber = 1;
             foreach (var lesson in filteredLessons)
@@ -369,17 +738,15 @@ public class LessonController : ControllerBase
                 currentRow++;
             }
 
-            // --- Настройка ширины колонок ---
             worksheet.Column(1).AdjustToContents();
             worksheet.Column(2).AdjustToContents();
             worksheet.Column(3).AdjustToContents();
             worksheet.Column(4).Width = 50;
 
-            // 4. Сохраняем в поток и возвращаем как файл
-            using (var stream = new MemoryStream())
+            using (var outStream = new MemoryStream())
             {
-                workbook.SaveAs(stream);
-                var content = stream.ToArray();
+                workbook.SaveAs(outStream);
+                var content = outStream.ToArray();
                 var contentType = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
                 var fileName = $"Export_{user?.FullName}_{DateTime.Now:yyyyMMdd}.xlsx";
 
@@ -387,6 +754,22 @@ public class LessonController : ControllerBase
             }
         }
     }
+
+    public class CreateLessonRequest
+    {
+        public Guid Id { get; set; }
+        public Guid GroupId { get; set; }
+        public Guid TeacherId { get; set; }
+        public string Name { get; set; } = "";
+        public DateTime StartTime { get; set; }
+        public string? Topic { get; set; }
+        public string? Homework { get; set; }
+        public string? Subject { get; set; }
+
+        public bool RepeatWeekly { get; set; }
+        public DateTime? EndDate { get; set; }
+    }
+
     public class ExportDto
     {
         public Guid? GroupId { get; set; }

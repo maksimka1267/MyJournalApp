@@ -27,6 +27,9 @@
         <button type="button" class="btn btn-outline-primary" data-bs-toggle="modal" data-bs-target="#importExcelModal">
             ⬆️ Імпорт з Excel
         </button>
+        <button type="button" class="btn btn-outline-success" data-bs-toggle="modal" data-bs-target="#uploadGroupFileModal">
+            📎 Додати файл у систему
+        </button>
     </div>
 
     <!-- Модалка создания группы -->
@@ -64,7 +67,41 @@
             </div>
         </div>
     </div>
-
+    <!-- Модалка загрузки файла для конкретной группы -->
+    <div class="modal fade" id="uploadGroupFileModal" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog">
+            <div class="modal-content rounded-4">
+                <form method="post" enctype="multipart/form-data">
+                    @Html.AntiForgeryToken()
+                    <input type="hidden" name="handler" value="UploadGroupFile" />
+                    <div class="modal-header">
+                        <h5 class="modal-title">Додати файл у систему</h5>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                    </div>
+                    <div class="modal-body">
+                        <div class="mb-3">
+                            <label class="form-label">Група</label>
+                            <select name="UploadFile.GroupId" class="form-select" required>
+                                <option value="">Оберіть групу</option>
+                                @foreach (var g in Model.GroupsWithDetails.OrderBy(g => g.Group.Name))
+                                {
+                                    <option value="@g.Group.Id">@g.Group.Name</option>
+                                }
+                            </select>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">Excel (.xlsx)</label>
+                            <input type="file" name="UploadFile.File" class="form-control" accept=".xlsx" required />
+                            <div class="form-text">Файл буде збережено під назвою групи. Якщо такий вже існує — його буде замінено.</div>
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="submit" class="btn btn-success w-100">Завантажити</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
     <!-- Модалка импорта Excel -->
     <div class="modal fade" id="importExcelModal" tabindex="-1" aria-labelledby="importExcelLabel" aria-hidden="true">
         <div class="modal-dialog">
@@ -129,7 +166,7 @@
                 </div>
 
                 <div class="modal-footer">
-                    <button type="submit" class="btn btn-dark w-100">Генерувати файл з оцінками</button>
+                    <button type="submit" class="btn btn-dark w-100">Генерувати файл</button>
                 </div>
             </form>
         </div>

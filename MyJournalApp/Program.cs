@@ -23,8 +23,6 @@ builder.Services.AddHttpClient("ApiClient", c =>
     c.BaseAddress = new Uri("/api/", UriKind.Relative); // обратим внимание на завершающий слэш
 });
 
-
-
 // HttpContextAccessor для Razor Pages
 builder.Services.AddHttpContextAccessor();
 builder.Services.Configure<JsonOptions>(options =>

@@ -18,6 +18,7 @@ public class GroupsModel : PageModel
     public List<GroupWithDetails> GroupsWithDetails { get; set; } = new();
     public List<User> AllTeachers { get; set; } = new();
     public Dictionary<Guid, string> TeacherNames { get; set; } = new();
+    [BindProperty] public UploadGroupFileModel UploadFile { get; set; }
 
     [BindProperty] public GroupExcelImportModel ExcelImport { get; set; }
     [BindProperty] public MoveStudentModel MoveStudent { get; set; }
@@ -88,6 +89,7 @@ public class GroupsModel : PageModel
 
         return handler switch
         {
+            "UploadGroupFile" => await UploadGroupFileAsync(),
             "ImportExcel" => await ImportGroupsFromExcelAsync(),
             "MoveStudent" => await MoveStudentAsync(),
             "CreateGroup" => await CreateGroupAsync(),
@@ -96,6 +98,34 @@ public class GroupsModel : PageModel
             _ => Page()
         };
     }
+    private async Task<IActionResult> UploadGroupFileAsync()
+    {
+        if (UploadFile == null || UploadFile.GroupId == Guid.Empty || UploadFile.File == null || UploadFile.File.Length == 0)
+        {
+            TempData["Error"] = "Оберіть групу та файл.";
+            return RedirectToPage();
+        }
+
+        // авторизация уже проставлена выше
+        using var content = new MultipartFormDataContent();
+        content.Add(new StringContent(UploadFile.GroupId.ToString()), "groupId");
+
+        var fileContent = new StreamContent(UploadFile.File.OpenReadStream());
+        fileContent.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+        content.Add(fileContent, "file", UploadFile.File.FileName);
+
+        var resp = await _httpClient.PostAsync(ApiUrl("/api/GroupFiles/upload"), content);
+        if (!resp.IsSuccessStatusCode)
+        {
+            var msg = await resp.Content.ReadAsStringAsync();
+            TempData["Error"] = string.IsNullOrWhiteSpace(msg) ? "Не вдалося завантажити файл." : msg;
+            return RedirectToPage();
+        }
+
+        TempData["Success"] = "Файл збережено для групи.";
+        return RedirectToPage();
+    }
+
     private async Task<IActionResult> DeleteGroupAsync(Guid id)
     {
         if (id == Guid.Empty)
@@ -199,6 +229,11 @@ public class GroupsModel : PageModel
 public class GroupExcelImportModel
 {
     public IFormFile File { get; set; }
+}
+public class UploadGroupFileModel
+{
+    public Guid GroupId { get; set; }
+    public IFormFile File { get; set; } = default!;
 }
 
 public class MoveStudentModel

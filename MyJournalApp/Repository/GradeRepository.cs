@@ -1,4 +1,5 @@
 ﻿using Microsoft.EntityFrameworkCore;
+using Microsoft.IdentityModel.Tokens;
 using MyJournalApp.Data;
 
 public class GradeRepository : Repository<Grade>, IGradeRepository
@@ -32,13 +33,29 @@ public class GradeRepository : Repository<Grade>, IGradeRepository
     public async Task<IEnumerable<Grade>> GetByStudentIdAsync(Guid studentId)
     {
         return await _context.Grades
-            .Where(g => g.StudentId == studentId)
+            .Where(g => g.StudentId == studentId
+                        && g.Value.HasValue)   // исключаем null
             .ToListAsync();
     }
     public async Task<List<Grade>> GetByJournalAndDateAsync(Guid journalEntryId, DateTime date)
     {
         return await _context.Grades
             .Where(g => g.JournalEntryId == journalEntryId && g.Created.Date == date.Date)
+            .ToListAsync();
+    }
+    public async Task<IReadOnlyList<Grade>> GetByStudentIdsAndDateRangeAsync(IEnumerable<Guid> studentIds, DateTime startDate, DateTime endDate)
+    {
+        var ids = studentIds.ToList();
+        if (ids.Count == 0) return Array.Empty<Grade>();
+
+        var start = startDate.Date;
+        var endExclusive = endDate.Date.AddDays(1); // [start, end]
+
+        return await _context.Grades
+            .AsNoTracking()
+            .Where(g => ids.Contains(g.StudentId) &&
+                        g.Created >= start &&
+                        g.Created < endExclusive)
             .ToListAsync();
     }
 

@@ -12,6 +12,17 @@ public class LessonRepository : Repository<Lesson>, ILessonRepository
             .OrderBy(l => l.StartTime)
             .ToListAsync();
     }
+    public async Task<List<string>> GetSubjectsByTeacherAsync(Guid teacherId, DateTime start, DateTime end)
+    {
+        return await _context.Lessons
+            .Where(l => l.TeacherId == teacherId &&
+                        l.StartTime >= start &&
+                        l.StartTime <= end)
+            .Select(l => l.Name)
+            .Distinct()
+            .OrderBy(n => n)
+            .ToListAsync();
+    }
 
     public async Task<List<Lesson>> GetByTeacherAsync(
         Guid teacherId, DateTime from, DateTime to, Guid? groupId, string? subject)

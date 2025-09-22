@@ -350,6 +350,46 @@ public class AuthController : ControllerBase
         await _groupRepository.SaveChangesAsync();
         return Ok("Bulk registration complete (upsert).");
     }
+    [Authorize]
+    [HttpPost("reset-password")]
+    public async Task<IActionResult> ResetPassword([FromBody] ResetPasswordDto dto)
+    {
+        if (dto == null || (dto.UserId == null && string.IsNullOrWhiteSpace(dto.Email)))
+            return BadRequest("Specify UserId or Email.");
+
+        // Проверяем, что вызывающий — админ (по БД, не по JWT-claim на всякий случай)
+        var meIdStr = User.FindFirstValue(ClaimTypes.NameIdentifier);
+        if (!Guid.TryParse(meIdStr, out var meId))
+            return Unauthorized();
+
+        var me = await _userRepository.GetByIdAsync(meId);
+        if (me == null || !string.Equals(me.Role, "Admin", StringComparison.OrdinalIgnoreCase))
+            return Forbid();
+
+        // Находим целевого пользователя по Id или Email
+        User? target = null;
+        if (dto.UserId.HasValue)
+            target = await _userRepository.GetByIdAsync(dto.UserId.Value);
+        else if (!string.IsNullOrWhiteSpace(dto.Email))
+            target = await _userRepository.GetByEmail(dto.Email);
+
+        if (target == null)
+            return NotFound("User not found.");
+
+        // Сбрасываем пароль на "test" и требуем смену при следующем входе
+        target.PasswordHash = _hasher.Generate("test");
+        target.MustChangePassword = true;
+
+        await _userRepository.Update(target);
+        await _userRepository.SaveChangesAsync();
+
+        return Ok(new { message = "Password reset to default.", userId = target.Id });
+    }
+    public class ResetPasswordDto
+    {
+        public Guid? UserId { get; set; }
+        public string? Email { get; set; }
+    }
 
     // DTOs
     public class RegisterDto

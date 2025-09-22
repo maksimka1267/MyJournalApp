@@ -30,4 +30,12 @@ public class JournalEntryRepository : Repository<JournalEntry>, IJournalEntryRep
         await _context.JournalEntries.AddRangeAsync(entries);
         await _context.SaveChangesAsync();
     }
+    public async Task<List<(Guid GroupId, string Name)>> GetJournalNamesWithGroupAsync(IEnumerable<Guid> groupIds)
+    {
+        return await _context.JournalEntries
+            .Where(j => groupIds.Contains(j.GroupId))
+            .Select(j => new ValueTuple<Guid, string>(j.GroupId, j.Name))
+            .ToListAsync();
+    }
+
 }

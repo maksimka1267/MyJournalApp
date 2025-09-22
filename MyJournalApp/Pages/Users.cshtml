@@ -59,9 +59,20 @@
                     @foreach (var user in Model.FilteredUsers.OrderBy(g => g.FullName))
                     {
                         var groupName = Model.GetGroupName(user.Id, user.Role);
-                        <tr>
-                            <td>@user.FullName</td>
-                            <td>@user.Email</td>
+                        <tr id="row-@user.Id">
+                            <!-- Ім’я -->
+                            <td>
+                                <span class="view-name">@user.FullName</span>
+                                <input class="form-control d-none edit-name" name="EditFullName" value="@user.FullName" form="editForm-@user.Id" />
+                            </td>
+
+                            <!-- Email -->
+                            <td>
+                                <span class="view-email">@user.Email</span>
+                                <input class="form-control d-none edit-email" name="EditEmail" value="@user.Email" form="editForm-@user.Id" />
+                            </td>
+
+                            <!-- Роль -->
                             <td>
                                 <span class="badge bg-light border text-dark">
                                     @(user.Role switch
@@ -73,8 +84,30 @@
                                     })
                         </span>
                     </td>
-                    <td>@groupName</td>
-                    <td>
+
+                            <!-- Група -->
+                            <td>@groupName</td>
+
+                            <!-- Дії -->
+                            <td class="d-flex gap-2 flex-wrap">
+                                <!-- ✏️ Редагувати / 💾 Зберегти -->
+                                <form method="post" class="d-inline" id="editForm-@user.Id">
+                                    @Html.AntiForgeryToken()
+                                    <input type="hidden" name="handler" value="EditUser" />
+                                    <input type="hidden" name="EditUserId" value="@user.Id" />
+
+                                    <button type="button"
+                                            class="btn btn-outline-secondary btn-sm edit-btn"
+                                            onclick="enterEdit('@user.Id')">
+                                        ✏️
+                                    </button>
+
+                                    <button type="submit"
+                                            class="btn btn-success btn-sm d-none save-btn">
+                                        💾
+                                    </button>
+                                </form>
+
                         @if (user.Role == "Teacher")
                                 {
                                     bool isAdmin = Model.TeacherAdminStatus.TryGetValue(user.Id, out var flag) && flag;
@@ -85,18 +118,26 @@
                                         <input type="checkbox" onchange="this.form.submit()" @(isAdmin ? "checked" : "") />
                                     </form>
                                 }
-                            </td>
 
-                    <td>
-                        <!-- 🗑 Кнопка удаления одного -->
-                        <form method="post" class="d-inline" onsubmit="return confirm('Ви впевнені, що хочете видалити цього користувача?');">
-                            @Html.AntiForgeryToken()
-                            <input type="hidden" name="id" value="@user.Id" />
-                            <button type="submit" class="btn btn-danger btn-sm">🗑 Видалити</button>
-                        </form>
-                    </td>
-                </tr>
-                                }
+                                <!-- 🔐 Скинути пароль -->
+                                <form method="post" class="d-inline"
+                                      onsubmit="return confirm('Скинути пароль для цього користувача? Пароль стане \" test\".');">
+                                    @Html.AntiForgeryToken()
+                                    <input type="hidden" name="handler" value="ResetPassword" />
+                                    <input type="hidden" name="resetUserId" value="@user.Id" />
+                                    <button type="submit" class="btn btn-warning btn-sm">🔐</button>
+                                </form>
+
+                                <!-- 🗑 Видалити -->
+                                <form method="post" class="d-inline"
+                                      onsubmit="return confirm('Ви впевнені, що хочете видалити цього користувача?');">
+                                    @Html.AntiForgeryToken()
+                                    <input type="hidden" name="id" value="@user.Id" />
+                                    <button type="submit" class="btn btn-danger btn-sm">🗑</button>
+                                </form>
+                            </td>
+                        </tr>
+                    }
                 </tbody>
             </table>
         </div>
@@ -206,5 +247,25 @@ else
         function onExcelRoleChange(select) {
             document.getElementById('excelGroupSelectContainer').classList.toggle('d-none', select.value !== 'Student');
         }
+        function enterEdit(id) {
+          const row = document.getElementById('row-' + id);
+          // показать инпуты, скрыть лейблы
+          row.querySelectorAll('.view-name, .view-email').forEach(el => el.classList.add('d-none'));
+          row.querySelectorAll('.edit-name, .edit-email').forEach(el => el.classList.remove('d-none'));
+
+          // показать кнопку Сохранить, скрыть Редактировать
+          const form = document.getElementById('editForm-' + id);
+          form.querySelector('.save-btn').classList.remove('d-none');
+          form.querySelector('.edit-btn').classList.add('d-none');
+        }
+
+        // (твои уже существующие обработчики можно оставить)
+        function onRoleChange(select) {
+            document.getElementById('groupSelectContainer').classList.toggle('d-none', select.value !== 'Student');
+        }
+        function onExcelRoleChange(select) {
+            document.getElementById('excelGroupSelectContainer').classList.toggle('d-none', select.value !== 'Student');
+        }
     </script>
+}
 }

@@ -7,7 +7,7 @@ public class Lesson
     public string Name { get; set; } = null!;         // Название предмета: "Математика"
     public Guid GroupId { get; set; }                 // Группа, для которой урок
     public Guid TeacherId { get; set; }               // Кто ведет
-
+    public Guid? SecondTeacherId { get; set; }
     public string? Topic { get; set; }       // Тема урока
     public string? Homework { get; set; }             // Домашнее задание
     public DateTime StartTime { get; set; }           // Время начала (дата + время)

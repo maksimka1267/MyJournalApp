@@ -12,6 +12,10 @@ public class UsersModel : PageModel
     {
         _httpClientFactory = factory;
     }
+    // UsersModel.cs (добавить свойства)
+    [BindProperty] public Guid EditUserId { get; set; }
+    [BindProperty] public string? EditFullName { get; set; }
+    [BindProperty] public string? EditEmail { get; set; }
 
     public List<User> Users { get; set; } = new();
     public List<Group> Groups { get; set; } = new();
@@ -81,6 +85,39 @@ public class UsersModel : PageModel
 
         var client = _httpClientFactory.CreateClient();
         client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", jwt);
+        var handler = Request.Form["handler"].ToString();
+
+        if (string.Equals(handler, "ResetPassword", StringComparison.OrdinalIgnoreCase))
+        {
+            var idStr = Request.Form["resetUserId"].ToString();
+            if (!Guid.TryParse(idStr, out var targetUserId))
+            {
+                ModelState.AddModelError(string.Empty, "Невірний ідентифікатор користувача.");
+                return RedirectToPage();
+            }
+            return await ResetPasswordInternalAsync(client, targetUserId);
+        }
+        if (string.Equals(handler, "EditUser", StringComparison.OrdinalIgnoreCase))
+        {
+            if (EditUserId == Guid.Empty)
+            {
+                ModelState.AddModelError(string.Empty, "Невірний користувач для редагування.");
+                return RedirectToPage(new { search = SearchTerm, role = SelectedRole });
+            }
+            var payload = new
+            {
+                UserId = EditUserId,
+                FullName = EditFullName,
+                Email = EditEmail
+            };
+
+            var resp = await client.PutAsJsonAsync(ApiUrl("/api/User/update-basic"), payload);
+            if (!resp.IsSuccessStatusCode)
+                ModelState.AddModelError(string.Empty, "Не вдалося оновити дані користувача.");
+
+            // возвращаемся с сохранёнными фильтрами
+            return RedirectToPage(new { search = SearchTerm, role = SelectedRole });
+        }
 
         // 1) Импорт из Excel
         if (ExcelUpload?.File is not null && ExcelUpload.File.Length > 0)
@@ -143,7 +180,17 @@ public class UsersModel : PageModel
 
         return RedirectToPage();
     }
-
+    private async Task<IActionResult> ResetPasswordInternalAsync(HttpClient client, Guid userId)
+    {
+        var payload = new { userId };
+        var resp = await client.PostAsJsonAsync(ApiUrl("/api/Auth/reset-password"), payload);
+        if (!resp.IsSuccessStatusCode)
+        {
+            ModelState.AddModelError(string.Empty, "Не вдалося скинути пароль. Перевірте права доступу (адміністратор) або існування користувача.");
+        }
+        // можемо додати позитивний флеш (якщо хочеш — через TempData), поки просто редірект:
+        return RedirectToPage();
+    }
     private string ApiUrl(string relativePath)
     {
         var path = relativePath.StartsWith("/") ? relativePath : "/" + relativePath;
