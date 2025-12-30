@@ -1,0 +1,34 @@
+﻿@page
+@model ProfileModel
+@{
+    Layout = "_Layout";
+    ViewData["Title"] = "Мій профіль";
+}
+
+<h2>Мій профіль</h2>
+
+@if (!string.IsNullOrEmpty(Model.StatusMessage))
+{
+    <p style="color: green">@Model.StatusMessage</p>
+}
+@if (!string.IsNullOrEmpty(Model.ErrorMessage))
+{
+    <p style="color: red">@Model.ErrorMessage</p>
+}
+
+<form method="post">
+    @Html.AntiForgeryToken()
+    <div>
+        <label>Email:</label>
+        <input asp-for="Email" disabled value="@Model.Email" />
+    </div>
+    <div>
+        <label>Роль:</label>
+        <input asp-for="Role" disabled value="@Model.Role" />
+    </div>
+    <div>
+        <label>Новий пароль:</label>
+        <input name="NewPassword" type="password" />
+    </div>
+    <button type="submit">Зберегти</button>
+</form>

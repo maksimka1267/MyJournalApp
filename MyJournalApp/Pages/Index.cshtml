@@ -1,10 +1,829 @@
 ﻿@page
-@model IndexModel
+@model MyJournalApp.Pages.IndexModel
+@using System.Globalization
 @{
-    ViewData["Title"] = "Home page";
+    Layout = "_Layout";
+    ViewData["Title"] = "Розклад";
+
+    var isAdmin = Model.Role == "Admin";
+    var isTeacher = Model.Role == "Teacher";
+    var isStudent = Model.Role == "Student";
+
+    var userId = User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+    var selectedDateTime = Model.SelectedDate.ToDateTime(TimeOnly.FromDateTime(DateTime.Now));
+    var ukCulture = new CultureInfo("uk-UA");
+}
+@functions {
+    private static readonly TimeSpan[] PairStarts = new[]
+    {
+        new TimeSpan(9,  0, 0),
+        new TimeSpan(10, 10, 0),
+        new TimeSpan(11, 20, 0),
+        new TimeSpan(12, 30, 0),
+        new TimeSpan(13, 40, 0),
+        new TimeSpan(14, 50, 0),
+        new TimeSpan(16,  0, 0),
+        new TimeSpan(17, 10, 0),
+    };
+
+    private static int GetPairNumber(DateTime lessonStart)
+    {
+        var t = lessonStart.TimeOfDay;
+        for (int i = 0; i < PairStarts.Length - 1; i++)
+        {
+            var mid = new TimeSpan((PairStarts[i].Ticks + PairStarts[i + 1].Ticks) / 2);
+            if (t < mid) return i + 1;
+        }
+        return PairStarts.Length;
+    }
 }
 
-<div class="text-center">
-    <h1 class="display-4">Welcome</h1>
-    <p>Learn about <a href="https://learn.microsoft.com/aspnet/core">building Web apps with ASP.NET Core</a>.</p>
+<h2 class="mb-4">Розклад</h2>
+<p class="text-muted">@Model.SelectedDate.ToString("dddd, dd MMMM yyyy", ukCulture)</p>
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+    @if (isAdmin)
+    {
+        <form method="get" class="d-flex align-items-center gap-2">
+            <select name="SelectedGroupId" class="form-select" onchange="this.form.submit()">
+                @foreach (var group in Model.AllGroups.OrderBy(g => g.Name))
+                {
+                    <option value="@group.Id" selected="@(group.Id == Model.SelectedGroupId)">@group.Name</option>
+                }
+            </select>
+            <input type="hidden" name="SelectedDate" value="@Model.SelectedDate.ToString("yyyy-MM-dd")" />
+        </form>
+
+        <div class="d-flex align-items-center gap-2">
+            <button class="btn btn-dark" data-bs-toggle="modal" data-bs-target="#addLessonModal">➕ Додати заняття</button>
+
+            <button class="btn btn-outline-dark" data-bs-toggle="modal" data-bs-target="#exportHoursModal">
+                ⬇️ Витягнути години
+            </button>
+
+            @* Переключатель режима масового редактирования *@
+            @if (!Model.BulkMode)
+            {
+                <a class="btn btn-dark"
+                   href="?SelectedGroupId=@Model.SelectedGroupId&SelectedDate=@Model.SelectedDate.ToString("yyyy-MM-dd")&BulkMode=true">
+                    🛠 Масове редагування
+                </a>
+            }
+            else
+            {
+                <a class="btn btn-outline-dark"
+                   href="?SelectedGroupId=@Model.SelectedGroupId&SelectedDate=@Model.SelectedDate.ToString("yyyy-MM-dd")&BulkMode=false">
+                    🔚 Вийти з режиму
+                </a>
+
+                @* <-- НОВОЕ: переключатель подрежима удаления *@
+                <button type="button" id="toggleBulkDelete" class="btn btn-outline-danger">
+                    🗑 Масове видалення
+                </button>
+            }
+        </div>
+    }
 </div>
+
+<a class="btn btn-outline-dark mb-3" href="?SelectedGroupId=@Model.SelectedGroupId&SelectedDate=@DateTime.Today.ToString("yyyy-MM-dd")">📅 Поточний тиждень</a>
+
+<div class="d-flex justify-content-between mb-3">
+    <div class="d-flex gap-2">
+        <a class="btn btn-outline-secondary" href="?SelectedGroupId=@Model.SelectedGroupId&SelectedDate=@Model.SelectedDate.AddDays(-7).ToString("yyyy-MM-dd")">◀️ Попередній тиждень</a>
+        <a class="btn btn-outline-secondary" href="?SelectedGroupId=@Model.SelectedGroupId&SelectedDate=@Model.SelectedDate.AddDays(7).ToString("yyyy-MM-dd")">▶️ Наступний тиждень</a>
+    </div>
+</div>
+
+<div class="d-flex gap-2 mb-4">
+    @foreach (var day in Model.WeekDays)
+    {
+        <a class="btn @(day == Model.SelectedDate ? "btn-dark" : "btn-outline-secondary")"
+           href="?SelectedGroupId=@Model.SelectedGroupId&SelectedDate=@day.ToString("yyyy-MM-dd")">
+            @day.ToString("ddd dd")
+        </a>
+    }
+</div>
+
+@if (Model.BulkMode && isAdmin)
+{
+    @* ЕДИНАЯ ФОРМА для масового применения *@
+    <form id="bulkForm" method="post" class="mb-3">
+        @Html.AntiForgeryToken()
+        <input type="hidden" name="handler" id="bulkHandler" value="" />
+        <input type="hidden" name="SelectedGroupId" value="@Model.SelectedGroupId" />
+        <input type="hidden" name="SelectedDate" value="@Model.SelectedDate.ToString("yyyy-MM-dd")" />
+
+        @* Данные для OnPost *@
+        <input type="hidden" name="BulkChangesJson" id="BulkChangesJson" />
+        <input type="hidden" name="BulkStartDate" id="BulkStartDate" />
+        <input type="hidden" name="BulkEndDate" id="BulkEndDateHidden" />
+
+        <div class="alert alert-info d-flex flex-wrap align-items-center gap-3" id="bulkPanel" style="display:none;">
+            <div>
+                <strong>Масове редагування:</strong>
+                оберіть «дату до (включно)», до якої застосувати внесені сьогодні зміни.
+            </div>
+            <div class="d-flex align-items-center gap-2">
+                <label class="form-label mb-0">Застосувати до дати</label>
+                <input type="date" class="form-control" id="BulkEndDate" />
+            </div>
+            <div class="ms-auto d-flex gap-2">
+                <button type="button" id="bulkSaveBtn" class="btn btn-success" disabled>💾 Зберегти масові зміни</button>
+                <a class="btn btn-outline-secondary"
+                   href="?SelectedGroupId=@Model.SelectedGroupId&SelectedDate=@Model.SelectedDate.ToString("yyyy-MM-dd")&BulkMode=true">
+                    Скасувати зміни
+                </a>
+            </div>
+            <div class="w-100 small text-muted" id="bulkHint"></div>
+        </div>
+
+        <div class="table-responsive">
+            <table class="table table-bordered table-hover align-middle">
+                <thead class="table-light">
+                    <tr>
+                        <th style="width:1%;">Видалити</th> @* НОВОЕ *@
+                        <th>Пара</th>
+                        <th>Час</th>
+                        <th>Предмет</th>
+                        <th style="min-width:260px;">Предмет (inline)</th>
+                        <th style="min-width:260px;">Викладач (inline)</th>
+                        <th>Поточні викладачі</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var lesson in Model.DayLessons.OrderBy(l => l.StartTime))
+                    {
+                        var start = lesson.StartTime;
+                        var end = start.Add(TimeSpan.FromMinutes(60));
+                        var teacher1 = Model._teacherNameCache.GetValueOrDefault(lesson.TeacherId, "—");
+                        string teacher2 = (lesson.SecondTeacherId.HasValue && lesson.SecondTeacherId.Value != Guid.Empty)
+                        ? Model._teacherNameCache.GetValueOrDefault(lesson.SecondTeacherId.Value, "—") : "";
+
+                        <tr data-lesson-id="@lesson.Id">
+                            @* НОВОЕ: чекбокс удаления (по-умолчанию скрыт, включается при “Масове видалення”) *@
+                            <td class="text-center">
+                                <input type="checkbox"
+                                       class="form-check-input bulk-delete-checkbox"
+                                       data-lesson-id="@lesson.Id"
+                                       data-lesson-date="@lesson.StartTime.ToString("yyyy-MM-dd")"
+                                       style="display:none;" />
+                            </td>
+
+                            <td>@GetPairNumber(lesson.StartTime)</td>
+                            <td>@start.ToString("HH:mm") - @end.ToString("HH:mm")</td>
+                            <td>
+                                @{
+                                    var gName = Model.AllGroups.FirstOrDefault(g => g.Id == lesson.GroupId)?.Name ?? "";
+                                    if (!string.IsNullOrWhiteSpace(gName))
+                                    {
+                                        @($"{lesson.Name} ({gName})")
+                                    }
+                                    else
+                                    {
+
+                                        @lesson.Name
+                                    }
+                                }
+                            </td>
+                            <td>
+                                <input type="text"
+                                       class="form-control form-control-sm bulk-edit"
+                                       value="@lesson.Name"
+                                       data-initial="@lesson.Name"
+                                       data-field="Name"
+                                       data-lesson-id="@lesson.Id"
+                                       data-lesson-date="@lesson.StartTime.ToString("yyyy-MM-dd")" />
+                            </td>
+                            <td>
+                                <select class="form-select form-select-sm bulk-edit"
+                                        data-field="TeacherId"
+                                        data-initial="@lesson.TeacherId.ToString()"
+                                        data-lesson-id="@lesson.Id"
+                                        data-lesson-date="@lesson.StartTime.ToString("yyyy-MM-dd")">
+                                    <option value="">-- Оберіть викладача --</option>
+                                    @foreach (var t in Model.Teachers.OrderBy(x => x.FullName))
+                                    {
+                                        <option value="@t.Id" @(t.Id == lesson.TeacherId ? "selected" : "")>@t.FullName</option>
+                                    }
+                                </select>
+                            </td>
+                            <td>
+                                @teacher1
+                                @if (!string.IsNullOrEmpty(teacher2))
+                                {
+                                    <br /> 
+                                    @teacher2
+                                }
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </form>
+}
+else
+{
+    <table class="table table-bordered table-hover align-middle">
+        <thead class="table-light">
+            <tr>
+                <th>Пара</th>
+                <th>Час</th>
+                <th>Предмет</th>
+                <th>Години</th>
+                <th>Тема</th>
+                <th>Домашнє завдання</th>
+                <th>Викладач</th>
+                @if (isTeacher || isAdmin)
+                {
+                    <th style="width: 1%;"></th>
+                }
+            </tr>
+        </thead>
+        <tbody>
+            @foreach (var lesson in Model.DayLessons.OrderBy(l => l.StartTime))
+            {
+                var start = lesson.StartTime;
+                var end = start.Add(TimeSpan.FromMinutes(60));
+
+                var teacher1 = Model._teacherNameCache.GetValueOrDefault(lesson.TeacherId, "—");
+                string teacher2 = "";
+                if (lesson.SecondTeacherId.HasValue && lesson.SecondTeacherId.Value != Guid.Empty)
+                {
+                    teacher2 = Model._teacherNameCache.GetValueOrDefault(lesson.SecondTeacherId.Value, "—");
+                }
+
+                bool isOwner = (lesson.TeacherId.ToString() == userId)
+                || (lesson.SecondTeacherId.HasValue && lesson.SecondTeacherId.Value.ToString() == userId);
+                bool isTodayLesson = lesson.StartTime.Date == DateTime.Today;
+
+                bool canEditAsTeacher =
+                isTeacher && ((Model.CurrentTeacher?.IsAdmin ?? false) || (isOwner && isTodayLesson));
+
+                <tr>
+                    <td>@GetPairNumber(lesson.StartTime)</td>
+                    <td>@start.ToString("HH:mm") - @end.ToString("HH:mm")</td>
+                    <td>
+                        @{
+                            if (isTeacher)
+                            {
+                                var gName = Model.AllGroups.FirstOrDefault(g => g.Id == lesson.GroupId)?.Name ?? "";
+                                if (!string.IsNullOrWhiteSpace(gName))
+                                {
+                                    @($"{lesson.Name} ({gName})")
+                                }
+                                else
+                                {
+                                    @lesson.Name
+                                }
+                            }
+                            else
+                            {
+                                @lesson.Name
+                            }
+                        }
+                    </td>
+
+                    <td>
+                        @if (lesson.Clocks.HasValue && lesson.Clocks.Value > 0)
+                        {
+                            @lesson.Clocks @:год.
+                        }
+                        else
+                        {
+                            @:–
+                        }
+                    </td>
+<td>@lesson.Topic</td>
+<td>@lesson.Homework</td>
+<td>
+    @teacher1
+    @if (!string.IsNullOrEmpty(teacher2))
+    {
+        <br />
+        @teacher2
+    }
+</td>
+
+                    <td>
+                        @if (canEditAsTeacher)
+                        {
+                            <button class="btn btn-sm btn-outline-primary"
+                                    data-bs-toggle="modal"
+                                    data-bs-target="#editLessonModal"
+                                    data-lesson-id="@lesson.Id"
+                                    data-lesson-topic="@lesson.Topic"
+                                    data-lesson-homework="@lesson.Homework"
+                                    data-lesson-group="@lesson.GroupId"
+                                    data-lesson-date="@lesson.StartTime.ToString("yyyy-MM-ddTHH:mm")"
+                                    data-lesson-clocks="@(lesson.Clocks?.ToString() ?? "")">
+                                📝 Редагувати тему / ДЗ
+                            </button>
+                        }
+                        else if (isAdmin)
+                        {
+                            <button class="btn btn-sm btn-outline-warning"
+                                    data-bs-toggle="modal"
+                                    data-bs-target="#changeTeacherModal"
+                                    data-lesson-id="@lesson.Id"
+                                    data-lesson-teacher="@lesson.TeacherId">
+                                🔄 Заміна викладача
+                            </button>
+                        }
+                    </td>
+                </tr>
+            }
+        </tbody>
+    </table>
+}
+
+@if (isAdmin)
+{
+    <button class="btn btn-outline-primary mt-3" data-bs-toggle="modal" data-bs-target="#importLessonModal">📥 Імпортувати розклад з Excel</button>
+}
+
+<!-- Модалки -->
+<div class="modal fade" id="addLessonModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <form method="post">
+                @Html.AntiForgeryToken()
+                <input type="hidden" name="handler" value="AddLesson" />
+
+                <div class="modal-header">
+                    <h5 class="modal-title">➕ Додати заняття до розкладу</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+
+                <div class="modal-body">
+                    <input type="hidden" name="InputLesson.Id" />
+                    <input type="hidden" name="InputLesson.GroupId" value="@Model.SelectedGroupId" />
+
+                    <div class="mb-3">
+                        <label class="form-label">Дата і час початку</label>
+                        <input id="lessonStartTime"
+                               name="InputLesson.StartTime"
+                               type="datetime-local"
+                               class="form-control"
+                               required
+                               value="@selectedDateTime.ToString("yyyy-MM-ddTHH:mm")" />
+                    </div>
+
+                    @if (isAdmin)
+                    {
+                        <div class="mb-3">
+                            <label class="form-label">Назва предмету</label>
+                            <input type="text"
+                                   name="InputLesson.Name"
+                                   class="form-control"
+                                   placeholder="Введіть назву предмету"
+                                   required />
+                        </div>
+
+                        <div class="mb-3">
+                            <label class="form-label">Викладач</label>
+                            <select name="InputLesson.TeacherId" class="form-select" required>
+                                <option disabled selected value="">Оберіть викладача</option>
+                                @foreach (var teacher in Model.Teachers.OrderBy(x => x.FullName))
+                                {
+                                    <option value="@teacher.Id">@teacher.FullName</option>
+                                }
+                            </select>
+                        </div>
+                    }
+
+                    <div class="mb-3">
+                        <label class="form-label">Тема заняття</label>
+                        <input name="InputLesson.Topic" class="form-control" />
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label">Домашнє завдання</label>
+                        <textarea name="InputLesson.Homework" class="form-control"></textarea>
+                    </div>
+
+                    <!-- Створити серію -->
+                    <div class="form-check mb-3">
+                        <input type="checkbox"
+                               class="form-check-input"
+                               id="repeatWeekly"
+                               name="InputLesson.RepeatWeekly"
+                               value="true" />
+                        <label class="form-check-label" for="repeatWeekly">
+                            Створити серію (щотижня)
+                        </label>
+                    </div>
+
+                    <div class="mb-3" id="endDateWrap" style="display:none;">
+                        <label class="form-label">Дата завершення серії</label>
+                        <input type="date"
+                               name="InputLesson.EndDate"
+                               id="endDateInput"
+                               class="form-control" />
+                        <div class="form-text">
+                            Уроки будуть створені щотижня на той самий день тижня до цієї дати (включно).
+                        </div>
+                    </div>
+                </div>
+
+                <div class="modal-footer">
+                    <button type="submit" class="btn btn-dark">Зберегти</button>
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Скасувати</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<div class="modal fade" id="importLessonModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <form method="post" enctype="multipart/form-data">
+                @Html.AntiForgeryToken()
+                <input type="hidden" name="handler" value="ImportLessons" />
+                <div class="modal-header">
+                    <h5 class="modal-title">📥 Імпортувати розклад з Excel</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <input type="hidden" name="GroupId" value="@Model.SelectedGroupId" />
+                    <div class="mb-3">
+                        <label class="form-label">Оберіть Excel-файл розкладу</label>
+                        <input type="file" name="File" class="form-control" accept=".xlsx" required />
+                    </div>
+                    <div class="mb-3">
+                        <label for="isNumeratorSelect" class="form-label">Тип тижня для імпорту</label>
+                        <select id="isNumeratorSelect" name="IsNumerator" class="form-select" required>
+                            <option value="true" selected>Чисельник</option>
+                            <option value="false">Знаменник</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="submit" class="btn btn-success">📤 Імпортувати</button>
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Скасувати</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<div class="modal fade" id="editLessonModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <form method="post">
+                @Html.AntiForgeryToken()
+                <input type="hidden" name="handler" value="EditLesson" />
+                <div class="modal-header">
+                    <h5 class="modal-title">📝 Додати тему / ДЗ</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <input type="hidden" name="InputLesson.Id" />
+                    <input type="hidden" name="InputLesson.GroupId" />
+                    <input type="hidden" name="InputLesson.StartTime" />
+                    <div class="mb-3">
+                        <label class="form-label">Тема заняття</label>
+                        <input name="InputLesson.Topic" class="form-control" />
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Домашнє завдання</label>
+                        <textarea name="InputLesson.Homework" class="form-control"></textarea>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Кількість годин</label>
+                        <input name="InputLesson.Clocks" type="number" class="form-control" min="0" step="1" placeholder="Напр., 2" />
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="submit" class="btn btn-primary">Зберегти</button>
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Скасувати</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<div class="modal fade" id="exportHoursModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content border-0 rounded-4 shadow-lg">
+            <form method="post">
+                @Html.AntiForgeryToken()
+                <input type="hidden" name="handler" value="Export" />
+                <div class="modal-header border-0 pb-0">
+                    <h5 class="modal-title fw-semibold">Витягнути години</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    @if (Model.Role == "Admin")
+                    {
+                        <div class="mb-3">
+                            <label class="form-label">Викладач</label>
+                            <select name="ExportFilters.TeacherId" class="form-select" required>
+                                <option value="">Оберіть викладача</option>
+                                @foreach (var t in Model.Teachers.OrderBy(x => x.FullName))
+                                {
+                                    <option value="@t.Id">@t.FullName</option>
+                                }
+                            </select>
+                        </div>
+                    }
+                    else if (Model.Role == "Teacher")
+                    {
+                        <input type="hidden" name="ExportFilters.TeacherId" value="@Model.CurrentTeacher?.Id" />
+                    }
+
+                    <div class="mb-3">
+                        <label class="form-label">Предмет</label>
+                        <select name="ExportFilters.SubjectName" class="form-select">
+                            <option value="">Усі предмети</option>
+                            @foreach (var subj in Model.GroupSubjects)
+                            {
+                                <option value="@subj">@subj</option>
+                            }
+                        </select>
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label">Група</label>
+                        <select name="ExportFilters.GroupId" class="form-select">
+                            <option value="">Оберіть групу</option>
+                            @foreach (var g in Model.AllGroups.OrderBy(x => x.Name))
+                            {
+                                <option value="@g.Id" @(g.Id == Model.SelectedGroupId ? "selected" : "")>@g.Name</option>
+                            }
+                        </select>
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label">Дата початку</label>
+                        <input type="date" name="ExportFilters.StartDate" class="form-control" />
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label">Дата закінчення</label>
+                        <input type="date" name="ExportFilters.EndDate" class="form-control" />
+                    </div>
+                </div>
+                <div class="modal-footer border-0 pt-0">
+                    <button type="submit" class="btn btn-dark w-100 py-2">Витягнути файл</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<div class="modal fade" id="changeTeacherModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <form method="post">
+                @Html.AntiForgeryToken()
+                <input type="hidden" name="handler" value="ChangeTeacher" />
+                <input type="hidden" name="InputLesson.Id" />
+                <div class="modal-header">
+                    <h5 class="modal-title">🔄 Заміна викладача</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label class="form-label">Виберіть нового викладача</label>
+                        <select name="InputLesson.TeacherId" class="form-select" required>
+                            <option disabled selected value="">-- Оберіть викладача --</option>
+                            @foreach (var t in Model.Teachers.OrderBy(x => x.FullName))
+                            {
+                                <option value="@t.Id">@t.FullName</option>
+                            }
+                        </select>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="submit" class="btn btn-primary">Зберегти</button>
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Скасувати</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+@section Scripts {
+    <script>
+        // ---- Modal: Edit Lesson (teacher) ----
+        document.addEventListener("DOMContentLoaded", () => {
+            const editModal = document.getElementById('editLessonModal');
+            if (!editModal) return;
+            editModal.addEventListener('show.bs.modal', function (event) {
+                const button = event.relatedTarget;
+                if (!button) return;
+                editModal.querySelector('input[name="InputLesson.Id"]').value        = button.getAttribute('data-lesson-id');
+                editModal.querySelector('input[name="InputLesson.GroupId"]').value   = button.getAttribute('data-lesson-group');
+                editModal.querySelector('input[name="InputLesson.StartTime"]').value = button.getAttribute('data-lesson-date');
+                editModal.querySelector('input[name="InputLesson.Topic"]').value     = button.getAttribute('data-lesson-topic') || "";
+                editModal.querySelector('textarea[name="InputLesson.Homework"]').value = button.getAttribute('data-lesson-homework') || "";
+                const clocksInput = editModal.querySelector('input[name="InputLesson.Clocks"]');
+                if (clocksInput) clocksInput.value = button.getAttribute('data-lesson-clocks') || "";
+            });
+        });
+
+        // ---- Modal: Change Teacher (admin) ----
+        document.addEventListener("DOMContentLoaded", () => {
+            const changeTeacherModal = document.getElementById('changeTeacherModal');
+            if (!changeTeacherModal) return;
+            changeTeacherModal.addEventListener('show.bs.modal', function (event) {
+                const button = event.relatedTarget; if (!button) return;
+                changeTeacherModal.querySelector('input[name="InputLesson.Id"]').value = button.getAttribute('data-lesson-id');
+                const teacherId = button.getAttribute('data-lesson-teacher');
+                const select = changeTeacherModal.querySelector('select[name="InputLesson.TeacherId"]');
+                if (teacherId && select) select.value = teacherId;
+            });
+        });
+        (function(){
+            const isBulk = @((Model.BulkMode && isAdmin) ? "true" : "false");
+            if (!isBulk) return;
+
+            const bulkPanel = document.getElementById('bulkPanel');
+            const bulkSaveBtn = document.getElementById('bulkSaveBtn');
+            const bulkEndDate = document.getElementById('BulkEndDate');
+            const bulkEndDateHidden = document.getElementById('BulkEndDateHidden');
+            const bulkStartDateHidden = document.getElementById('BulkStartDate');
+            const bulkChangesJson = document.getElementById('BulkChangesJson');
+            const bulkHandler = document.getElementById('bulkHandler');
+            const bulkForm = document.getElementById('bulkForm');
+            const hint = document.getElementById('bulkHint');
+
+            // НОВОЕ: подрежим удаления
+            let bulkDeleteMode = false;
+            const toggleDeleteBtn = document.getElementById('toggleBulkDelete');
+
+            // edits: lessonId -> { Id, StartDate, fields..., Delete? }
+            const edits = new Map();
+            let minChangedDate = null;
+            let maxChangedDate = null;
+
+            function updateMinMax(d) {
+                if (!minChangedDate || d < minChangedDate) minChangedDate = d;
+                if (!maxChangedDate || d > maxChangedDate) maxChangedDate = d;
+            }
+
+            function updatePanel() {
+                const hasChanges = edits.size > 0;
+                bulkPanel.style.display = hasChanges ? 'flex' : 'none';
+                bulkSaveBtn.disabled = !(hasChanges && bulkEndDate.value);
+
+                if (hasChanges) {
+                    if (maxChangedDate) {
+                        bulkEndDate.min = maxChangedDate;
+                        if (!bulkEndDate.value || bulkEndDate.value < maxChangedDate) {
+                            bulkEndDate.value = maxChangedDate;
+                        }
+                    }
+                    if (minChangedDate) {
+                        bulkStartDateHidden.value = minChangedDate;
+                    }
+                    hint.textContent = `Змінено/позначено уроків: ${edits.size}. Мін. дата: ${minChangedDate ?? '—'}, Макс. дата: ${maxChangedDate ?? '—'}.` +
+                        (bulkDeleteMode ? ' Режим: МАСОВЕ ВИДАЛЕННЯ.' : '');
+                } else {
+                    bulkEndDate.value = "";
+                    bulkEndDate.min = "";
+                    bulkStartDateHidden.value = "";
+                    hint.textContent = "";
+                }
+            }
+
+            function markRow(lessonId, changed) {
+                const row = document.querySelector(`tr[data-lesson-id="${lessonId}"]`);
+                if (!row) return;
+                row.classList.toggle('table-danger', bulkDeleteMode && changed);
+                row.classList.toggle('table-warning', !bulkDeleteMode && changed);
+                // Блокируем inline-редакторы, если строка отмечена на удаление
+                const disable = bulkDeleteMode && changed;
+                row.querySelectorAll('.bulk-edit').forEach(el => el.disabled = disable);
+            }
+
+            function ensureEntry(lessonId, date) {
+                let entry = edits.get(lessonId);
+                if (!entry) {
+                    entry = { Id: lessonId, StartDate: date };
+                    edits.set(lessonId, entry);
+                }
+                return entry;
+            }
+
+            function onInputChanged(e) {
+                const el = e.target;
+                if (!el.classList.contains('bulk-edit')) return;
+                if (bulkDeleteMode) return; // в режимі видалення правки не принимаем
+
+                const field = el.dataset.field; // "Name" | "TeacherId" | ...
+                const initial = (el.dataset.initial ?? "");
+                const val = (el.value ?? "");
+                const lessonId = el.dataset.lessonId;
+                const d = el.dataset.lessonDate; // yyyy-MM-dd
+
+                const changed = (val !== initial);
+                let entry = edits.get(lessonId);
+
+                if (changed) {
+                    entry = ensureEntry(lessonId, d);
+                    entry[field] = field === "Clocks" && val.trim() === "" ? null : val;
+                    updateMinMax(d);
+                } else if (entry) {
+                    delete entry[field];
+                    const fieldsLeft = Object.keys(entry).filter(k => k !== "Id" && k !== "StartDate" && k !== "Delete");
+                    if (fieldsLeft.length === 0 && !entry.Delete) {
+                        edits.delete(lessonId);
+                    }
+                }
+
+                markRow(lessonId, edits.has(lessonId));
+                updatePanel();
+            }
+
+            function onDeleteToggled(e) {
+                const cb = e.target;
+                if (!cb.classList.contains('bulk-delete-checkbox')) return;
+
+                const lessonId = cb.dataset.lessonId;
+                const d = cb.dataset.lessonDate;
+
+                if (cb.checked) {
+                    const entry = ensureEntry(lessonId, d);
+                    entry.Delete = true;
+                    updateMinMax(d);
+                } else {
+                    const entry = edits.get(lessonId);
+                    if (entry) {
+                        delete entry.Delete;
+                        // Если больше нет полей — убрать запись
+                        const fieldsLeft = Object.keys(entry).filter(k => k !== "Id" && k !== "StartDate" && k !== "Delete");
+                        if (fieldsLeft.length === 0) edits.delete(lessonId);
+                    }
+                }
+
+                markRow(lessonId, edits.has(lessonId));
+                updatePanel();
+            }
+
+            // Показ/скрытие чекбоксов удаления
+            function setDeleteMode(on) {
+                bulkDeleteMode = !!on;
+                document.querySelectorAll('.bulk-delete-checkbox').forEach(cb => {
+                    cb.style.display = on ? '' : 'none';
+                    if (!on) cb.checked = edits.get(cb.dataset.lessonId)?.Delete === true;
+                });
+                // визуально подсветим уже отмеченные на удаление
+                edits.forEach((entry, lessonId) => markRow(lessonId, true));
+                updatePanel();
+            }
+
+            document.querySelectorAll('.bulk-edit').forEach(inp => {
+                inp.addEventListener('input', onInputChanged);
+                inp.addEventListener('change', onInputChanged);
+            });
+
+            document.querySelectorAll('.bulk-delete-checkbox').forEach(cb => {
+                cb.addEventListener('change', onDeleteToggled);
+            });
+
+            if (toggleDeleteBtn) {
+                toggleDeleteBtn.addEventListener('click', () => {
+                    setDeleteMode(!bulkDeleteMode);
+                    toggleDeleteBtn.classList.toggle('btn-danger', bulkDeleteMode);
+                    toggleDeleteBtn.classList.toggle('btn-outline-danger', !bulkDeleteMode);
+                });
+            }
+
+            bulkEndDate.addEventListener('change', () => {
+                bulkSaveBtn.disabled = !(edits.size > 0 && bulkEndDate.value);
+                bulkEndDateHidden.value = bulkEndDate.value || "";
+            });
+
+            bulkSaveBtn.addEventListener('click', (e) => {
+                e.preventDefault();
+                if (edits.size === 0) return;
+                if (!bulkEndDate.value) return;
+
+                bulkChangesJson.value = JSON.stringify(Array.from(edits.values()));
+                bulkEndDateHidden.value = bulkEndDate.value;
+                bulkHandler.value = "BulkApplyChanges";
+                bulkForm.submit();
+            });
+
+            // старт: delete-режим выключен
+            setDeleteMode(false);
+        })();
+                document.addEventListener("DOMContentLoaded", () => {
+            const cb = document.getElementById('repeatWeekly');
+            const wrap = document.getElementById('endDateWrap');
+            if (!cb || !wrap) return;
+            const toggle = () => {
+                wrap.style.display = cb.checked ? '' : 'none';
+                const endDate = wrap.querySelector('input[name="InputLesson.EndDate"]');
+                if (endDate) endDate.required = cb.checked;
+            };
+            cb.addEventListener('change', toggle);
+            toggle();
+        });
+
+    </script>
+
+}

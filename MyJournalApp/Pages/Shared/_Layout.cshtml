@@ -1,51 +1,223 @@
-﻿<!DOCTYPE html>
-<html lang="en">
+﻿@using System.Net
+@using System.Net.Http
+@using System.Net.Http.Headers
+@using System.Security.Claims
+@using System.Text.Json
+@inject IHttpClientFactory HttpClientFactory
+@inject Microsoft.AspNetCore.Http.IHttpContextAccessor HttpContextAccessor
+
+@functions {
+    // Модель ответа /api/Auth/me
+    private sealed class MeDto
+    {
+        public Guid Id { get; set; }
+        public string? Email { get; set; }
+        public string? Role { get; set; }
+        public bool MustChangePassword { get; set; }
+    }
+}
+
+@{
+    // ---- Серверная проверка пользователя через /api/Auth/me ----
+    var token = HttpContextAccessor.HttpContext?.Request.Cookies["cookies"];
+    var isAuthenticated = User?.Identity?.IsAuthenticated == true;
+    bool mustChangePassword = false;
+
+    if (isAuthenticated && !string.IsNullOrWhiteSpace(token))
+    {
+        try
+        {
+            var client = HttpClientFactory.CreateClient("ApiClient"); // базовый адрес задан в Program.cs
+            using var req = new HttpRequestMessage(HttpMethod.Get, "api/Auth/me");
+            req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+
+            using var res = await client.SendAsync(req);
+            if (res.StatusCode == HttpStatusCode.Unauthorized)
+            {
+                isAuthenticated = false;
+            }
+            else if (res.IsSuccessStatusCode)
+            {
+                await using var s = await res.Content.ReadAsStreamAsync();
+                var me = await JsonSerializer.DeserializeAsync<MeDto>(s, new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+                mustChangePassword = me?.MustChangePassword ?? false;
+            }
+            // Иные статусы — оставляем mustChangePassword = false (мягкая деградация)
+        }
+        catch
+        {
+            // Ошибки сети/JSON — мягкая деградация
+        }
+    }
+
+    var isAdmin = User.IsInRole("Admin");
+    var isStudent = User.IsInRole("Student");
+    var roleName = User.FindFirst(ClaimTypes.Role)?.Value;
+}
+
+<!DOCTYPE html>
+<html lang="uk">
 <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>@ViewData["Title"] - MyJournalApp</title>
-    <link rel="stylesheet" href="~/lib/bootstrap/dist/css/bootstrap.min.css" />
-    <link rel="stylesheet" href="~/css/site.css" asp-append-version="true" />
-    <link rel="stylesheet" href="~/MyJournalApp.styles.css" asp-append-version="true" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>@ViewData["Title"] - Електронний журнал</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet" />
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+    <style>
+        body {
+            background-color: #f8f9fa;
+        }
+
+        .sidebar {
+            height: 100vh;
+            position: fixed;
+            top: 0;
+            left: 0;
+            background-color: #fff;
+            border-right: 1px solid #dee2e6;
+            padding: 1rem;
+            width: 240px;
+        }
+
+            .sidebar .nav-link {
+                color: #212529;
+                font-weight: 500;
+            }
+
+                .sidebar .nav-link:hover, .sidebar .nav-link.active {
+                    background-color: #f1f1f1;
+                    border-radius: 6px;
+                }
+
+        .main-content {
+            margin-left: 240px;
+            padding: 1.5rem;
+        }
+
+        .topbar {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 0.5rem 0;
+            margin-bottom: 1rem;
+            border-bottom: 1px solid #dee2e6;
+        }
+
+            .topbar h5 {
+                margin: 0;
+                font-weight: 600;
+            }
+
+        footer {
+            text-align: center;
+            margin-top: 2rem;
+            padding: 1rem 0;
+            border-top: 1px solid #dee2e6;
+            color: #6c757d;
+        }
+        /* Чекбокси та радіо з чорними рамками */
+        .form-check-input {
+            border-color: #000 !important;
+        }
+
+            .form-check-input:focus {
+                border-color: #000 !important;
+                box-shadow: 0 0 0 0.2rem rgba(0,0,0,.25);
+            }
+
+            .form-check-input:checked {
+                background-color: #000 !important;
+                border-color: #000 !important;
+            }
+
+        /* Таблиці з чорними рамками */
+        .table,
+        .table th,
+        .table td {
+            border: 1px solid #000 !important;
+        }
+
+            .table thead th {
+                border-bottom: 2px solid #000 !important;
+            }
+
+    </style>
 </head>
+
 <body>
-    <header>
-        <nav class="navbar navbar-expand-sm navbar-toggleable-sm navbar-light bg-white border-bottom box-shadow mb-3">
-            <div class="container">
-                <a class="navbar-brand" asp-area="" asp-page="/Index">MyJournalApp</a>
-                <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target=".navbar-collapse" aria-controls="navbarSupportedContent"
-                        aria-expanded="false" aria-label="Toggle navigation">
-                    <span class="navbar-toggler-icon"></span>
-                </button>
-                <div class="navbar-collapse collapse d-sm-inline-flex justify-content-between">
-                    <ul class="navbar-nav flex-grow-1">
-                        <li class="nav-item">
-                            <a class="nav-link text-dark" asp-area="" asp-page="/Index">Home</a>
-                        </li>
-                        <li class="nav-item">
-                            <a class="nav-link text-dark" asp-area="" asp-page="/Privacy">Privacy</a>
-                        </li>
-                    </ul>
-                </div>
+    <div class="sidebar">
+        <h5 class="mb-4">Навігація</h5>
+
+        @if (!isAuthenticated)
+        {
+            <!-- Неавторизованный: минимальная навигация -->
+            <ul class="nav flex-column">
+                <li class="nav-item"><a class="nav-link" href="/Account/Login">🔑 Вхід</a></li>
+            </ul>
+        }
+        else if (mustChangePassword)
+        {
+            <!-- Ограниченный доступ до смены пароля -->
+            <div class="alert alert-warning p-2 mb-2" role="alert" style="font-size:.9rem;">
+                Потрібно змінити пароль, щоб отримати доступ до розділів.
             </div>
-        </nav>
-    </header>
-    <div class="container">
-        <main role="main" class="pb-3">
+            <ul class="nav flex-column">
+                <li class="nav-item"><a class="nav-link" href="/Profile">👤 Профіль</a></li>
+                <li class="nav-item mt-2">
+                    <!-- Рекомендуется иметь страницу /Account/Logout, которая сделает POST к api/Auth/logout и редиректит на /Account/Login -->
+                    <a class="nav-link text-danger" href="/Account/Logout">🚪 Вихід</a>
+                </li>
+            </ul>
+        }
+        else
+        {
+            <!-- Полный сайдбар -->
+            <ul class="nav flex-column">
+                <li class="nav-item"><a class="nav-link" href="/">🏠 Головна</a></li>
+                <li class="nav-item"><a class="nav-link" href="/Journal">📘 Журнал</a></li>
+                <li class="nav-item"><a class="nav-link" href="/Calendar">📅 Календар</a></li>
+                @if (!isStudent)
+                {
+                    <li class="nav-item"><a class="nav-link" href="/Students">👥 Студенти</a></li>
+                    <li class="nav-item"><a class="nav-link" href="/Groups">🏫 Групи</a></li>
+                }
+                <li class="nav-item"><a class="nav-link" href="/Profile">👤 Профіль</a></li>
+                @if (isAdmin)
+                {
+                    <li class="nav-item"><a class="nav-link" href="/Users">🛠 Користувачі</a></li>
+                }
+                <li class="nav-item mt-2">
+                    <form id="logoutForm" method="post" action="/api/Auth/logout">
+                        <button type="submit" class="btn btn-link nav-link text-danger p-0">🚪 Вихід</button>
+                    </form>
+                    <script>
+                        document.getElementById('logoutForm').addEventListener('submit', async e => {
+                            e.preventDefault();
+                            await fetch('/api/Auth/logout', { method: 'POST', credentials: 'same-origin' });
+                            window.location.href = '/Account/Login';
+                        });
+                    </script>
+                </li>
+            </ul>
+        }
+    </div>
+
+    <div class="main-content">
+        <div class="topbar">
+            <h5>Електронний журнал</h5>
+            <div>
+                <span>Користувач: <strong>@User.Identity?.Name</strong></span><br />
+                <small>Роль: @roleName</small>
+            </div>
+        </div>
+
+        <main role="main">
             @RenderBody()
         </main>
     </div>
 
-    <footer class="border-top footer text-muted">
-        <div class="container">
-            &copy; 2025 - MyJournalApp - <a asp-area="" asp-page="/Privacy">Privacy</a>
-        </div>
-    </footer>
+    <footer>&copy; 2025 - Запорізький будівельний фаховий коледж</footer>
 
-    <script src="~/lib/jquery/dist/jquery.min.js"></script>
-    <script src="~/lib/bootstrap/dist/js/bootstrap.bundle.min.js"></script>
-    <script src="~/js/site.js" asp-append-version="true"></script>
-
-    @await RenderSectionAsync("Scripts", required: false)
+    @RenderSection("Scripts", required: false)
 </body>
 </html>

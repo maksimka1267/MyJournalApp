@@ -1,0 +1,289 @@
+﻿@page
+@model GroupsModel
+@{
+    Layout = "_Layout";
+    ViewData["Title"] = "Групи";
+}
+
+<h1>Список груп</h1>
+@if (User.IsInRole("Teacher"))
+{
+    <div class="mb-3">
+        <button type="button" class="btn btn-outline-dark" data-bs-toggle="modal" data-bs-target="#reportModal">
+            📊 Рапортичка
+        </button>
+    </div>
+}
+
+@if (User.IsInRole("Admin"))
+{
+    <div class="d-flex gap-2 mb-3">
+        <!-- Кнопка создания группы -->
+        <button type="button" class="btn btn-dark" data-bs-toggle="modal" data-bs-target="#createGroupModal">
+            + Створити нову групу
+        </button>
+
+        <!-- Кнопка импорта из Excel -->
+        <button type="button" class="btn btn-outline-primary" data-bs-toggle="modal" data-bs-target="#importExcelModal">
+            ⬆️ Імпорт з Excel
+        </button>
+        <button type="button" class="btn btn-outline-success" data-bs-toggle="modal" data-bs-target="#uploadGroupFileModal">
+            📎 Додати файл у систему
+        </button>
+    </div>
+
+    <!-- Модалка создания группы -->
+    <div class="modal fade" id="createGroupModal" tabindex="-1" aria-labelledby="createGroupLabel" aria-hidden="true">
+        <div class="modal-dialog">
+            <div class="modal-content rounded-4">
+                <form method="post">
+                    @Html.AntiForgeryToken()
+                    <input type="hidden" name="handler" value="CreateGroup" />
+                    <div class="modal-header">
+                        <h5 class="modal-title" id="createGroupLabel">Створити нову групу</h5>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Закрити"></button>
+                    </div>
+                    <div class="modal-body">
+                        <div class="mb-3">
+                            <label class="form-label">Назва групи</label>
+                            <input type="text" name="GroupName" class="form-control" placeholder="Наприклад: Група Г-4" required />
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">Куратор</label>
+                            <select name="TeacherId" class="form-select" required>
+                                <option value="">Оберіть куратора</option>
+                                @foreach (var teacher in Model.AllTeachers)
+                                {
+                                    var name = Model.TeacherNames.GetValueOrDefault(teacher.Id, "Невідомий");
+                                    <option value="@teacher.Id">@name</option>
+                                }
+                            </select>
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="submit" class="btn btn-dark w-100">Створити групу</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+    <!-- Модалка загрузки файла для конкретной группы -->
+    <div class="modal fade" id="uploadGroupFileModal" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog">
+            <div class="modal-content rounded-4">
+                <form method="post" enctype="multipart/form-data">
+                    @Html.AntiForgeryToken()
+                    <input type="hidden" name="handler" value="UploadGroupFile" />
+                    <div class="modal-header">
+                        <h5 class="modal-title">Додати файл у систему</h5>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                    </div>
+                    <div class="modal-body">
+                        <div class="mb-3">
+                            <label class="form-label">Група</label>
+                            <select name="UploadFile.GroupId" class="form-select" required>
+                                <option value="">Оберіть групу</option>
+                                @foreach (var g in Model.GroupsWithDetails.OrderBy(g => g.Group.Name))
+                                {
+                                    <option value="@g.Group.Id">@g.Group.Name</option>
+                                }
+                            </select>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">Семестр</label>
+                            <select name="UploadFile.Semester" class="form-select" required>
+                                <option value="">Оберіть семестр</option>
+                                <option value="1">1 семестр</option>
+                                <option value="2">2 семестр</option>
+                            </select>
+
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">Excel (.xlsx)</label>
+                            <input type="file" name="UploadFile.File" class="form-control" accept=".xlsx" required />
+                            <div class="form-text">Файл буде збережено під назвою групи. Якщо такий вже існує — його буде замінено.</div>
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="submit" class="btn btn-success w-100">Завантажити</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+    <!-- Модалка импорта Excel -->
+    <div class="modal fade" id="importExcelModal" tabindex="-1" aria-labelledby="importExcelLabel" aria-hidden="true">
+        <div class="modal-dialog">
+            <div class="modal-content rounded-4">
+                <form method="post" enctype="multipart/form-data">
+                    @Html.AntiForgeryToken()
+                    <input type="hidden" name="handler" value="ImportExcel" />
+                    <div class="modal-header">
+                        <h5 class="modal-title" id="importExcelLabel">Імпорт груп з Excel</h5>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Закрити"></button>
+                    </div>
+                    <div class="modal-body">
+                        <div class="mb-3">
+                            <label class="form-label">Файл Excel</label>
+                            <input type="file" name="ExcelImport.File" class="form-control" accept=".xlsx" required />
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="submit" class="btn btn-primary w-100">Імпортувати</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+}
+<div class="modal fade" id="reportModal" tabindex="-1" aria-labelledby="reportModalLabel" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content rounded-4">
+            <form method="post">
+                @Html.AntiForgeryToken()
+                <input type="hidden" name="handler" value="GenerateReport" />
+
+                <div class="modal-header">
+                    <h5 class="modal-title" id="reportModalLabel">Генерувати рапортичку</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Закрити"></button>
+                </div>
+
+                <div class="modal-body">
+                    <!-- Выбор группы -->
+                    <div class="mb-3">
+                        <label class="form-label">Група</label>
+                        <select name="Report.GroupId" class="form-select" required>
+                            <option value="">Оберіть групу</option>
+                            @foreach (var g in Model.GroupsWithDetails.OrderBy(g => g.Group.Name))
+                            {
+                                <option value="@g.Group.Id">@g.Group.Name</option>
+                            }
+                        </select>
+                    </div>
+
+                    <!-- Дата начала -->
+                    <div class="mb-3">
+                        <label class="form-label">Дата початку</label>
+                        <input type="date" name="Report.StartDate" class="form-control" required />
+                    </div>
+
+                    <!-- Дата окончания -->
+                    <div class="mb-3">
+                        <label class="form-label">Дата закінчення</label>
+                        <input type="date" name="Report.EndDate" class="form-control" required />
+                    </div>
+                </div>
+
+                <div class="modal-footer">
+                    <button type="submit" class="btn btn-dark w-100">Генерувати файл</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+@if (Model.GroupsWithDetails.Any())
+{
+    foreach (var group in Model.GroupsWithDetails.OrderBy(g => g.Group.Name))
+    {
+        <div class="group-block mb-4 p-3 border rounded">
+            <div class="d-flex align-items-center justify-content-between">
+                <h3 class="mb-0">@group.Group.Name</h3>
+
+                @if (User.IsInRole("Admin"))
+                {
+                    var hasStatus = Model.FileStatuses.TryGetValue(group.Group.Id, out var st);
+                    var cnt = hasStatus ? st.Count : 0;
+                    var sem1 = hasStatus && st.Sem1Exists ? "✓ 1 семестр" : "— 1 семестр";
+                    var sem2 = hasStatus && st.Sem2Exists ? "✓ 2 семестр" : "— 2 семестр";
+                    var title = $"{sem1}\n{sem2}";
+
+                    <div class="d-flex align-items-center gap-2">
+                        <span class="badge bg-secondary" title="@title" data-bs-toggle="tooltip" data-bs-placement="left">
+                            📎 @cnt
+                        </span>
+
+                        <!-- Кнопка удаления группы как у тебя -->
+                        <form method="post" class="ms-1" onsubmit="return confirm('Видалити групу «@group.Group.Name»? Це дію неможливо скасувати.');">
+                            @Html.AntiForgeryToken()
+                            <input type="hidden" name="handler" value="DeleteGroup" />
+                            <input type="hidden" name="id" value="@group.Group.Id" />
+                            <button type="submit" class="btn btn-sm btn-outline-danger">
+                                🗑 Видалити групу
+                            </button>
+                        </form>
+                    </div>
+                }
+            </div>
+            <p><strong>Керівник групи:</strong> @group.TeacherName</p>
+            <p><strong>Email:</strong> @group.TeacherEmail</p>
+
+            @if (group.Students.Any())
+            {
+                <table class="table table-bordered">
+                    <thead>
+                        <tr>
+                            <th>ПІБ студента</th>
+                            <th>Email</th>
+                            @if (User.IsInRole("Admin"))
+                            {
+                                <th>Змінити групу</th>
+                            }
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var student in group.Students.OrderBy(g => g.FullName))
+                        {
+                            <tr>
+                                <td>@student.FullName</td>
+                                <td>@student.Email</td>
+
+                                @if (User.IsInRole("Admin"))
+                                {
+                                    <td>
+                                        <!-- Форма перемещения студента -->
+                                        <form method="post" class="d-flex align-items-center gap-2">
+                                            @Html.AntiForgeryToken()
+                                            <input type="hidden" name="handler" value="MoveStudent" />
+                                            <!-- Айди студента -->
+                                            <input type="hidden" name="MoveStudent.StudentId" value="@student.Id" />
+                                            <!-- Из какой группы -->
+                                            <input type="hidden" name="MoveStudent.FromGroupId" value="@group.Group.Id" />
+
+                                            <!-- В какую группу -->
+                                            <select name="MoveStudent.ToGroupId" class="form-select form-select-sm w-auto">
+                                                @foreach (var g in Model.GroupsWithDetails.OrderBy(g => g.Group.Name))
+                                                {
+                                                    <option value="@g.Group.Id" selected="@(g.Group.Id == group.Group.Id)">
+                                                        @g.Group.Name
+                                                    </option>
+                                                }
+                                            </select>
+
+                                            <button type="submit" class="btn btn-sm btn-primary">Змінити</button>
+                                        </form>
+                                    </td>
+                                }
+
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            }
+            else
+            {
+                <p>Студентів немає.</p>
+            }
+        </div>
+    }
+}
+else
+{
+    <p>Немає доступних груп.</p>
+}
+<script>
+    document.addEventListener('DOMContentLoaded', () => {
+      const tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'));
+      tooltipTriggerList.map(el => new bootstrap.Tooltip(el));
+    });
+</script>
