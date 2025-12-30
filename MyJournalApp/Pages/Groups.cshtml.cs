@@ -14,6 +14,7 @@ public class GroupsModel : PageModel
     {
         _httpClient = httpClientFactory.CreateClient(); // без BaseAddress
     }
+    public Dictionary<Guid, GroupFilesStatusDto> FileStatuses { get; set; } = new();
 
     public List<GroupWithDetails> GroupsWithDetails { get; set; } = new();
     public List<User> AllTeachers { get; set; } = new();
@@ -75,7 +76,13 @@ public class GroupsModel : PageModel
 
             GroupsWithDetails.Add(groupDetails);
         }
-
+        if (me.Role == "Admin" && groups.Count > 0)
+        {
+            // батч-запросом
+            var query = string.Join("&", groups.Select(g => $"groupIds={Uri.EscapeDataString(g.Id.ToString())}"));
+            var statuses = await _httpClient.GetFromJsonAsync<List<GroupFilesStatusDto>>(ApiUrl($"/api/GroupFiles/status?{query}")) ?? new();
+            FileStatuses = statuses.ToDictionary(s => s.GroupId, s => s);
+        }
         return Page();
     }
 
@@ -109,6 +116,7 @@ public class GroupsModel : PageModel
         // авторизация уже проставлена выше
         using var content = new MultipartFormDataContent();
         content.Add(new StringContent(UploadFile.GroupId.ToString()), "groupId");
+        content.Add(new StringContent(UploadFile.Semester.ToString()), "semester");
 
         var fileContent = new StreamContent(UploadFile.File.OpenReadStream());
         fileContent.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
@@ -233,6 +241,7 @@ public class GroupExcelImportModel
 public class UploadGroupFileModel
 {
     public Guid GroupId { get; set; }
+    public int Semester { get; set; }
     public IFormFile File { get; set; } = default!;
 }
 

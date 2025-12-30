@@ -230,6 +230,7 @@ else
                 <th>Пара</th>
                 <th>Час</th>
                 <th>Предмет</th>
+                <th>Години</th>
                 <th>Тема</th>
                 <th>Домашнє завдання</th>
                 <th>Викладач</th>
@@ -282,16 +283,28 @@ else
                             }
                         }
                     </td>
-                    <td>@lesson.Topic</td>
-                    <td>@lesson.Homework</td>
+
                     <td>
-                        @teacher1
-                        @if (!string.IsNullOrEmpty(teacher2))
+                        @if (lesson.Clocks.HasValue && lesson.Clocks.Value > 0)
                         {
-                            <br />
-                            @teacher2
+                            @lesson.Clocks @:год.
+                        }
+                        else
+                        {
+                            @:–
                         }
                     </td>
+<td>@lesson.Topic</td>
+<td>@lesson.Homework</td>
+<td>
+    @teacher1
+    @if (!string.IsNullOrEmpty(teacher2))
+    {
+        <br />
+        @teacher2
+    }
+</td>
+
                     <td>
                         @if (canEditAsTeacher)
                         {

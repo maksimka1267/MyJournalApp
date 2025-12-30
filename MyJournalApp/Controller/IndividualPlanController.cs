@@ -10,7 +10,7 @@ using MyJournalApp.Interface; // IStudentRepository, IGroupRepository, IJournalE
 
 [ApiController]
 [Route("api/[controller]")]
-[Authorize] // доступен студенту / учителю / админу
+[Authorize] // студент / учитель / админ
 public class IndividualPlanController : ControllerBase
 {
     private readonly IStudentRepository _studentRepo;
@@ -38,20 +38,22 @@ public class IndividualPlanController : ControllerBase
         _env = env;
     }
 
-    // Для студента: его собственный план
+    // ---------- студент качает свой план ----------
+    // ?sem=1 | 2  (необязательный; если не передан — авто по текущей дате)
     [HttpGet("me")]
-    public async Task<IActionResult> DownloadForMe()
+    public async Task<IActionResult> DownloadForMe([FromQuery] int? sem)
     {
         var me = await _userRepo.GetByIdAsync(GetUserId());
         if (me == null || !string.Equals(me.Role, "Student", StringComparison.OrdinalIgnoreCase))
             return Forbid();
 
-        return await BuildAndReturnExcel(me.Id);
+        return await BuildAndReturnExcel(me.Id, sem);
     }
 
-    // Для админа/вчителя: по произвольному студенту
+    // ---------- админ/преподаватель/сам студент ----------
+    // ?sem=1 | 2  (необязательный; если не передан — авто по текущей дате)
     [HttpGet("student/{studentId:guid}")]
-    public async Task<IActionResult> DownloadForStudent(Guid studentId)
+    public async Task<IActionResult> DownloadForStudent(Guid studentId, [FromQuery] int? sem)
     {
         var me = await _userRepo.GetByIdAsync(GetUserId());
         if (me == null) return Forbid();
@@ -61,12 +63,12 @@ public class IndividualPlanController : ControllerBase
         var isSelf = me.Id == studentId;
         if (!isAdminOrTeacher && !isSelf) return Forbid();
 
-        return await BuildAndReturnExcel(studentId);
+        return await BuildAndReturnExcel(studentId, sem);
     }
 
-    private async Task<IActionResult> BuildAndReturnExcel(Guid studentId)
+    // ---------- основная логика ----------
+    private async Task<IActionResult> BuildAndReturnExcel(Guid studentId, int? semChoice)
     {
-        // 1) студент -> группа
         var student = await _studentRepo.GetByIdAsync(studentId);
         if (student == null || student.GroupId == Guid.Empty)
             return NotFound("Студента або його групу не знайдено.");
@@ -77,30 +79,33 @@ public class IndividualPlanController : ControllerBase
         var user = await _userRepo.GetByIdAsync(studentId);
         var studentName = user?.FullName ?? "Студент";
 
-        // 2) шаблон Excel по имени группы
+        // Диапазон дат семестра и номер семестра (1 — осінній, 2 — весняний)
+        DateTime semStart, semEnd;
+        int semNumber;
+        if (semChoice is 1 or 2)
+            GetSemesterRangeByChoice(DateTime.Today, semChoice!.Value, out semStart, out semEnd, out semNumber);
+        else
+            GetSemesterRangeAuto(DateTime.Today, out semStart, out semEnd, out semNumber);
+
+        // Путь к файлу-шаблону группы: <Group>_sem{1|2}.xlsx
         var safeGroupName = SanitizeFileName(group.Name);
         var baseDir = _env.WebRootPath ?? _env.ContentRootPath;
-        var path = System.IO.Path.Combine(baseDir, GroupFilesFolder, $"{safeGroupName}.xlsx");
+        var path = System.IO.Path.Combine(baseDir, GroupFilesFolder, $"{safeGroupName}_sem{semNumber}.xlsx");
         if (!System.IO.File.Exists(path))
-            return NotFound("Файл шаблону для цієї групи відсутній.");
+            return NotFound("Файл шаблону для цього семестру відсутній.");
 
-        // 3) текущий семестр
-        GetSemesterRange(DateTime.Today, out var semStart, out var semEnd);
-
-        // 4) оценки студента за семестр
+        // Оценки только за выбранный семестр
         var grades = await _gradeRepo.GetByStudentIdsAndDateRangeAsync(new[] { studentId }, semStart, semEnd);
 
-        // 5) журналы группы для маппинга предметов
-        var journals = await _journalRepo.GetByGroupIdAsync(group.Id); // если нет метода — заменить на GetAll + Where(GroupId)
+        // Маппинг «журнал -> предмет»
+        var journals = await _journalRepo.GetByGroupIdAsync(group.Id);
         var subjectByJournalId = journals.ToDictionary(
             j => j.Id,
             j => ExtractSubjectFromName(j.Name, j.Subject)
         );
 
-        // предмет -> список записей (дата, значение, тема)
-        var map = new Dictionary<string, List<(DateTime dt, int? val, string? comment)>>(
-            StringComparer.CurrentCultureIgnoreCase);
-
+        // Предмет -> список оценок (дата, значение, комментарий/тема)
+        var map = new Dictionary<string, List<(DateTime dt, int? val, string? comment)>>(StringComparer.CurrentCultureIgnoreCase);
         foreach (var g in grades.OrderBy(x => x.Created))
         {
             if (!subjectByJournalId.TryGetValue(g.JournalEntryId, out var subj)) continue;
@@ -112,15 +117,20 @@ public class IndividualPlanController : ControllerBase
             list.Add((g.Created, g.Value, g.Comment));
         }
 
-        // 6) открыть шаблон и заполнить
-        using var wb = new XLWorkbook(path);
-        var ws = wb.Worksheets.Worksheet(1); // при необходимости — по имени листа
+        // ✅ список "фізкультуры", для которых 30 = "зараховано"
+        var physicalSubjects = new HashSet<string>(StringComparer.CurrentCultureIgnoreCase)
+        {
+            "Фізична культура",
+            "Фізичне виховання"
+        };
 
-        // Верхний блок: заполняем по подписям строк
+        // Заполняем шаблон
+        using var wb = new XLWorkbook(path);
+        var ws = wb.Worksheets.Worksheet(1);
+
         SetValueByLabel(ws, "ЗДОБУВАЧ ОСВІТИ", studentName);
         SetValueByLabel(ws, "ГРУПА", group.Name);
 
-        // найти заголовки таблицы
         var headersResult = FindHeaders(ws, new[] { "ПРЕДМЕТ", "Форма контролю", "Оцінка" });
         var headers = headersResult.Cols;
         var headerRow = headersResult.HeaderRow;
@@ -129,40 +139,56 @@ public class IndividualPlanController : ControllerBase
             !headers.TryGetValue("Форма контролю", out var colForm) ||
             !headers.TryGetValue("Оцінка", out var colGrade))
         {
-            return BadRequest("Не вдалося знайти заголовки 'ПРЕДМЕТ' / 'Форма контролю' / 'Оцінка' у шаблоні.");
+            return BadRequest("Не знайдено потрібні заголовки у шаблоні.");
         }
 
-        // 7) Проход по строкам: одна оценка по предмету И теме из текущей строки
         int row = headerRow + 1;
         while (true)
         {
             var subj = ws.Cell(row, colSubject).GetString().Trim();
             if (string.IsNullOrWhiteSpace(subj)) break;
 
-            // тема (из Excel)
-            var formText = ws.Cell(row, colForm).GetString().Trim();
+            var formText = ws.Cell(row, colForm).GetString().Trim(); // тема/тип із шаблону
             string gradeCellText = "-";
 
-            if (!string.IsNullOrWhiteSpace(subj) && !string.IsNullOrWhiteSpace(formText)
-                && map.TryGetValue(subj, out var list) && list.Count > 0)
+            if (map.TryGetValue(subj, out var list) && list.Count > 0)
             {
-                var targetKey = MakeTopicKey(formText);
+                // ✅ Особое правило для фізкультури
+                if (physicalSubjects.Contains(subj))
+                {
+                    var targetKey = MakeTopicKey(formText);
 
-                // последняя по дате оценка по этой теме
-                var matched = list
-                    .Where(x => MakeTopicKey(x.comment) == targetKey && x.val.HasValue)
-                    .OrderBy(x => x.dt)
-                    .LastOrDefault();
+                    // 1) пробуем найти "30" по соответствию формы контролю / темы
+                    var has30ByForm = list.Any(x =>
+                        MakeTopicKey(x.comment) == targetKey &&
+                        x.val.HasValue &&
+                        x.val.Value == 30
+                    );
 
-                if (matched.val.HasValue)
-                    gradeCellText = matched.val.Value.ToString();
+                    // 2) если по форме не нашли — ищем любую 30 по этому предмету
+                    var has30Any = has30ByForm || list.Any(x => x.val.HasValue && x.val.Value == 30);
+
+                    if (has30Any)
+                        gradeCellText = "зараховано";
+                }
+                else
+                {
+                    // Обычное правило для остальных предметов
+                    var targetKey = MakeTopicKey(formText);
+                    var matched = list
+                        .Where(x => MakeTopicKey(x.comment) == targetKey && x.val.HasValue)
+                        .OrderBy(x => x.dt)
+                        .LastOrDefault();
+
+                    if (matched.val.HasValue)
+                        gradeCellText = matched.val.Value.ToString();
+                }
             }
 
             ws.Cell(row, colGrade).Value = gradeCellText;
             row++;
         }
 
-        // 8) отдать файл
         using var ms = new System.IO.MemoryStream();
         wb.SaveAs(ms);
         ms.Position = 0;
@@ -185,7 +211,7 @@ public class IndividualPlanController : ControllerBase
         if (string.IsNullOrWhiteSpace(baseName))
             return (fallbackSubject ?? "Предмет").Trim();
 
-        // предмет — часть ДО дефиса
+        // Предмет — часть ДО дефиса
         var idx = baseName.IndexOf('-');
         var beforeDash = idx >= 0 ? baseName[..idx] : baseName;
         return beforeDash.Trim();
@@ -201,36 +227,49 @@ public class IndividualPlanController : ControllerBase
                      .ToArray()
             );
 
-    // Осінній: 1 Sep (Y) – 31 Jan (Y+1)
-    // Весняний: 1 Feb – 30 Jun (Y)
-    // Jul–Aug: считаем актуальным весенний (1 Feb – 30 Jun Y)
-    private static void GetSemesterRange(DateTime today, out DateTime start, out DateTime end)
+    // --- Семестры ---
+    // Автовыбор (по сегодняшней дате)
+    private static void GetSemesterRangeAuto(DateTime today, out DateTime start, out DateTime end, out int semesterNumber)
     {
         int y = today.Year;
         int m = today.Month;
 
-        if (m >= 9) // Sep–Dec
+        if (m >= 9 || m == 1) // осінній: 1 Sep – 31 Jan
         {
+            semesterNumber = 1;
+            if (m == 1) y--; // январь относится к осеннему прошлого календарного года
             start = new DateTime(y, 9, 1);
             end = new DateTime(y + 1, 1, 31);
         }
-        else if (m == 1) // Jan — хвіст осіннього семестру
+        else // весняний: 1 Feb – 30 Jun
         {
-            start = new DateTime(y - 1, 9, 1);
-            end = new DateTime(y, 1, 31);
-        }
-        else if (m >= 2 && m <= 6) // Feb–Jun
-        {
+            semesterNumber = 2;
             start = new DateTime(y, 2, 1);
             end = new DateTime(y, 6, 30);
         }
-        else // Jul–Aug
+    }
+
+    // Явный выбор семестра (1/2) относительно «академического года» вокруг today
+    private static void GetSemesterRangeByChoice(DateTime today, int sem, out DateTime start, out DateTime end, out int semesterNumber)
+    {
+        sem = (sem == 2) ? 2 : 1;
+        semesterNumber = sem;
+
+        int y = today.Year;
+        if (sem == 1)
+        {
+            if (today.Month == 1) y--; // январь относится к осеннему семестру прошлого года
+            start = new DateTime(y, 9, 1);
+            end = new DateTime(y + 1, 1, 31);
+        }
+        else
         {
             start = new DateTime(y, 2, 1);
             end = new DateTime(y, 6, 30);
         }
     }
 
+    // --- Поиск и запись в шаблон ---
     private sealed record HeaderFindResult(Dictionary<string, int> Cols, int HeaderRow);
 
     // Установить значение по метке строки (находим ячейку с текстом label; пишем в жёлтую справа или просто в соседнюю справа)

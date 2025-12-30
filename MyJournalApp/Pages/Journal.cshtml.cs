@@ -119,20 +119,31 @@ public class JournalModel : PageModel
     private void BuildJournalColumns()
     {
         JournalColumns = Grades
-            .GroupBy(g => new {
+            .GroupBy(g => new
+            {
                 Date = g.Created.Date,
                 TopicKey = JournalColumn.MakeTopicKey(g.Comment)
             })
-            .Select(gr => new {
+            .Select(gr => new
+            {
                 Date = gr.Key.Date,
                 Topic = gr.Select(x => x.Comment)
                           .FirstOrDefault(c => !string.IsNullOrWhiteSpace(c)) ?? "",
-                FirstCreated = gr.Min(x => x.Created) // опорный час колонки
+                FirstCreated = gr.Min(x => x.Created),
+                LastCreated = gr.Max(x => x.Created),
+                TieKey = gr.Key.TopicKey
             })
+            // 1) Дата: старые даты левее, новые правее
             .OrderBy(x => x.Date)
-            .ThenBy(x => x.FirstCreated)            // РАНЕЕ созданная колонка — левее
-                                                    //.ThenBy(x => x.Topic)                 // опционально: тай-брейкер при равных временах
-            .Select(x => new JournalColumn { Date = x.Date, Topic = x.Topic })
+            // 2) Внутри одной даты: СТАРЕЙШАЯ колонка левее, НОВЕЙШАЯ правее
+            .ThenBy(x => x.FirstCreated)   // ⬅️ ВАЖНО: именно по возрастанию
+            .ThenBy(x => x.LastCreated)
+            .ThenBy(x => x.TieKey)
+            .Select(x => new JournalColumn
+            {
+                Date = x.Date,
+                Topic = x.Topic
+            })
             .ToList();
     }
     public async Task<IActionResult> OnPostAsync(string? handler)
@@ -160,8 +171,48 @@ public class JournalModel : PageModel
             "DeleteColumn" => await OnPostDeleteColumnAsync(),
             "ExportStudentGrades" => await OnPostExportStudentGradesAsync(),
             "DownloadIndividualPlan" => await OnPostDownloadIndividualPlanAsync(),
+            "DownloadJournalExcel" => await OnPostDownloadJournalExcelAsync(),
             _ => await OnGetAsync(SelectedJournalId)
         };
+    }
+    public async Task<IActionResult> OnPostDownloadJournalExcelAsync()
+    {
+        ModelState.Remove(nameof(SelectedTeacher)); // чтобы не мешала валидация других форм
+
+        var token = Request.Cookies["cookies"];
+        if (string.IsNullOrEmpty(token)) return RedirectToPage("/Account/Login");
+        _httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
+
+        // берем jid из формы или SelectedJournalId
+        Guid journalId = SelectedJournalId;
+        if (journalId == Guid.Empty && Guid.TryParse(Request.Form["jid"], out var jidFromForm))
+            journalId = jidFromForm;
+
+        if (journalId == Guid.Empty)
+        {
+            FlashMessage = "Журнал не обрано.";
+            return await OnGetAsync();
+        }
+
+        var url = ApiUrl($"/api/JournalExport/{journalId}");
+        var resp = await _httpClient.GetAsync(url);
+        if (!resp.IsSuccessStatusCode)
+        {
+            FlashMessage = "Не вдалося сформувати файл журналу.";
+            return RedirectToPage(new { selectedJournalId = journalId });
+        }
+
+        var bytes = await resp.Content.ReadAsByteArrayAsync();
+
+        // Имя файла = название журнала (как ты просил)
+        var cdName = resp.Content.Headers.ContentDisposition?.FileNameStar
+                     ?? resp.Content.Headers.ContentDisposition?.FileName
+                     ?? "journal.xlsx";
+
+        var contentType = resp.Content.Headers.ContentType?.ToString()
+                          ?? "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+
+        return File(bytes, contentType, cdName.Trim('"'));
     }
     private async Task<IActionResult> OnPostDownloadIndividualPlanAsync()
     {
@@ -170,8 +221,14 @@ public class JournalModel : PageModel
         if (string.IsNullOrEmpty(token)) return RedirectToPage("/Account/Login");
         _httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
 
-        // дергаем наш API
-        var url = ApiUrl("/api/IndividualPlan/me");
+        // читаем семестр из формы (ожидаем 1 или 2)
+        int sem = 0;
+        var semStr = (Request.Form["semester"].ToString() ?? "").Trim();
+        int.TryParse(semStr, out sem);
+        if (sem != 1 && sem != 2) sem = 1; // дефолт — I семестр
+
+        // дергаем наш API с параметром sem
+        var url = ApiUrl($"/api/IndividualPlan/me?sem={sem}");
         var resp = await _httpClient.GetAsync(url);
         if (!resp.IsSuccessStatusCode)
         {
@@ -185,7 +242,6 @@ public class JournalModel : PageModel
 
         return File(bytes, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", fileName);
     }
-
     public async Task<IActionResult> OnPostExportStudentGradesAsync()
     {
         // базовая валидация
@@ -368,6 +424,7 @@ public class JournalModel : PageModel
                 counter++;
             finalTopic = $"{topic} #{counter}";
         }
+        var stamp = date.Date.Add(DateTime.Now.TimeOfDay);
 
         bool hasError = false;
         foreach (var sid in studentIds)
@@ -380,7 +437,7 @@ public class JournalModel : PageModel
                 Value = 0,                    // «неатестований»
                 Comment = finalTopic,
                 TeacherId = UserId,
-                Created = date.Date,
+                Created = stamp,
                 IsPresent = null
             };
 
@@ -414,6 +471,11 @@ public class JournalModel : PageModel
 
     public async Task<IActionResult> OnPostAddSpecialGradesAsync()
     {
+        // Авторизация
+        _httpClient.DefaultRequestHeaders.Authorization =
+            new AuthenticationHeaderValue("Bearer", Request.Cookies["cookies"]);
+
+        // Запрет для «лише куратора»
         if (await IsCuratorOnlyForJournalAsync(GradesForUpdate.JournalId))
         {
             FlashMessage = "У вас лише перегляд журналу кураторської групи.";
@@ -426,30 +488,87 @@ public class JournalModel : PageModel
             return RedirectToPage(new { selectedJournalId = GradesForUpdate.JournalId });
         }
 
-        var date = GradesForUpdate.Date.Date;
-        bool hasError = false;
+        // Локальные хелперы, чтобы метод был самодостаточным
+        async Task<int> GetJournalMaxAsync(Guid journalId)
+        {
+            if (journalId == Guid.Empty) return 12;
 
-        var existingResp = await _httpClient.GetAsync(ApiUrl($"/api/Grade/journal/{GradesForUpdate.JournalId}/date/{date:yyyy-MM-dd}"));
+            var jr = await _httpClient.GetAsync(ApiUrl($"/api/Journal/{journalId}"));
+            if (!jr.IsSuccessStatusCode) return 12;
+
+            var journal = await jr.Content.ReadFromJsonAsync<JournalEntry>();
+            return journal?.MaxValue > 0 ? journal.MaxValue : 12;
+        }
+
+        static bool IsValidGradeValue(int? value, int maxValue)
+        {
+            if (!value.HasValue) return true;
+            if (value.Value == 30) return true; // исключение "залік"
+            return value.Value >= 0 && value.Value <= maxValue;
+        }
+
+        var maxValue = await GetJournalMaxAsync(GradesForUpdate.JournalId);
+
+        var date = GradesForUpdate.Date.Date;
+        var topic = GradesForUpdate.Comment.Trim();
+        var topicKey = JournalColumn.MakeTopicKey(topic);
+
+        bool hasError = false;
+        bool anyChanged = false;
+
+        // Берём все оценки журнала на эту дату
+        var existingResp = await _httpClient.GetAsync(
+            ApiUrl($"/api/Grade/journal/{GradesForUpdate.JournalId}/date/{date:yyyy-MM-dd}"));
+
         var existingGrades = existingResp.IsSuccessStatusCode
             ? await existingResp.Content.ReadFromJsonAsync<List<Grade>>() ?? new()
             : new List<Grade>();
 
-        var existingByStudent = existingGrades
+        // Оценки ТОЛЬКО по этой теме (колонке)
+        var sameTopicGrades = existingGrades
+            .Where(g => JournalColumn.MakeTopicKey(g.Comment) == topicKey)
+            .ToList();
+
+        bool columnAlreadyExists = sameTopicGrades.Any();
+
+        // Для быстрого доступа: студент → запись в этой спец-колонке
+        var existingByStudent = sameTopicGrades
             .GroupBy(g => g.StudentId)
             .ToDictionary(gr => gr.Key, gr => gr.First());
+
+        // Общий таймштамп для новой/обновлённой колонки
+        var stamp = date.Add(DateTime.Now.TimeOfDay);
+
+        // Обрабатываем то, что пришло из модалки
         foreach (var (studentKey, gradeValue) in GradesForUpdate.Grades)
         {
-            if (!Guid.TryParse(studentKey, out var studentId)) continue;
-            if (!gradeValue.HasValue) continue;
+            if (!Guid.TryParse(studentKey, out var studentId))
+                continue;
 
+            int? val = gradeValue;
             GradesForUpdate.Presence.TryGetValue(studentKey, out bool? presenceValue);
+
+            // ✅ ВАЛИДАЦИЯ
+            if (!IsValidGradeValue(val, maxValue))
+            {
+                FlashMessage = $"Некоректна оцінка: допустимо 0–{maxValue} або 30.";
+                return RedirectToPage(new { selectedJournalId = GradesForUpdate.JournalId });
+            }
+
+            // Если ни оценки, ни присутствия — ничего не меняем
+            if (!val.HasValue && !presenceValue.HasValue)
+                continue;
+
+            anyChanged = true;
 
             if (existingByStudent.TryGetValue(studentId, out var existing))
             {
-                existing.Value = gradeValue.Value;
-                existing.IsPresent = presenceValue;
-                existing.Comment = GradesForUpdate.Comment;
+                if (val.HasValue) existing.Value = val.Value;
+                if (presenceValue.HasValue) existing.IsPresent = presenceValue;
+
+                existing.Comment = topic;
                 existing.TeacherId = UserId;
+                existing.Created = stamp; // колонка считается "новой"
 
                 var upd = await _httpClient.PutAsJsonAsync(ApiUrl($"/api/Grade/{existing.Id}"), existing);
                 if (!upd.IsSuccessStatusCode) hasError = true;
@@ -461,26 +580,63 @@ public class JournalModel : PageModel
                     Id = Guid.NewGuid(),
                     StudentId = studentId,
                     JournalEntryId = GradesForUpdate.JournalId,
-                    Value = gradeValue.Value,
-                    Comment = GradesForUpdate.Comment,
+                    Value = val ?? 0,      // 0 = неатестований
+                    Comment = topic,
                     TeacherId = UserId,
-                    Created = date,
+                    Created = stamp,
                     IsPresent = presenceValue
                 };
+
                 var resp = await _httpClient.PostAsJsonAsync(ApiUrl("/api/Grade"), newGrade);
                 if (!resp.IsSuccessStatusCode) hasError = true;
             }
         }
 
-        // Синхронизируем тему только в той колонке, которую добавляем
-        foreach (var g in existingGrades
-            .Where(g => g.Comment == GradesForUpdate.Comment))
+        // Фолбек: если в модалке никому ничего не поставили,
+        // и такой колонки ещё нет — создаём пустую колонку (0 у всіх)
+        if (!anyChanged && !columnAlreadyExists)
         {
-            g.Comment = GradesForUpdate.Comment; // можно опустить, если не меняли
+            var journal = await _httpClient.GetFromJsonAsync<JournalEntry>(
+                ApiUrl($"/api/Journal/{GradesForUpdate.JournalId}"));
+
+            if (journal != null)
+            {
+                var groupUsers = await _httpClient
+                    .GetFromJsonAsync<List<User>>(ApiUrl($"/api/User/by-group/{journal.GroupId}")) ?? new();
+
+                foreach (var user in groupUsers)
+                {
+                    var newGrade = new Grade
+                    {
+                        Id = Guid.NewGuid(),
+                        StudentId = user.Id,
+                        JournalEntryId = GradesForUpdate.JournalId,
+                        Value = 0,
+                        Comment = topic,
+                        TeacherId = UserId,
+                        Created = stamp,
+                        IsPresent = null
+                    };
+
+                    var resp = await _httpClient.PostAsJsonAsync(ApiUrl("/api/Grade"), newGrade);
+                    if (!resp.IsSuccessStatusCode) hasError = true;
+                }
+            }
+        }
+
+        // Синхронизуем текст коментаря у всіх записів цієї колонки
+        foreach (var g in existingGrades
+            .Where(g => JournalColumn.MakeTopicKey(g.Comment) == topicKey && g.Comment != topic))
+        {
+            g.Comment = topic;
             var upd = await _httpClient.PutAsJsonAsync(ApiUrl($"/api/Grade/{g.Id}"), g);
             if (!upd.IsSuccessStatusCode) hasError = true;
         }
-        FlashMessage = hasError ? "Виникли помилки при збереженні." : "Колонку успішно збережено/оновлено.";
+
+        FlashMessage = hasError
+            ? "Виникли помилки при збереженні."
+            : "Колонку успішно збережено/оновлено.";
+
         return RedirectToPage(new { selectedJournalId = GradesForUpdate.JournalId });
     }
 
@@ -492,11 +648,33 @@ public class JournalModel : PageModel
         _httpClient.DefaultRequestHeaders.Authorization =
             new AuthenticationHeaderValue("Bearer", Request.Cookies["cookies"]);
 
+        // Запрет для «лише куратора»
         if (await IsCuratorOnlyForJournalAsync(GradesForUpdate.JournalId))
         {
             FlashMessage = "У вас лише перегляд журналу кураторської групи.";
             return RedirectToPage(new { selectedJournalId = GradesForUpdate.JournalId });
         }
+
+        // Локальные хелперы
+        async Task<int> GetJournalMaxAsync(Guid journalId)
+        {
+            if (journalId == Guid.Empty) return 12;
+
+            var jr = await _httpClient.GetAsync(ApiUrl($"/api/Journal/{journalId}"));
+            if (!jr.IsSuccessStatusCode) return 12;
+
+            var journal = await jr.Content.ReadFromJsonAsync<JournalEntry>();
+            return journal?.MaxValue > 0 ? journal.MaxValue : 12;
+        }
+
+        static bool IsValidGradeValue(int? value, int maxValue)
+        {
+            if (!value.HasValue) return true;
+            if (value.Value == 30) return true;
+            return value.Value >= 0 && value.Value <= maxValue;
+        }
+
+        var maxValue = await GetJournalMaxAsync(GradesForUpdate.JournalId);
 
         bool hasError = false;
 
@@ -522,10 +700,14 @@ public class JournalModel : PageModel
 
         // Загружаем по каждой дате, группируем по topicKey
         var existingByDateTopic = new Dictionary<(string dateKey, string topicKey), List<Grade>>(new DateTopicComparer());
+
         foreach (var (dateKey, topicKey) in dateTopicKeys)
         {
             var d = DateTime.ParseExact(dateKey, "yyyyMMdd", CultureInfo.InvariantCulture).Date;
-            var resp = await _httpClient.GetAsync(ApiUrl($"/api/Grade/journal/{GradesForUpdate.JournalId}/date/{d:yyyy-MM-dd}"));
+
+            var resp = await _httpClient.GetAsync(
+                ApiUrl($"/api/Grade/journal/{GradesForUpdate.JournalId}/date/{d:yyyy-MM-dd}"));
+
             var list = resp.IsSuccessStatusCode
                 ? await resp.Content.ReadFromJsonAsync<List<Grade>>() ?? new()
                 : new List<Grade>();
@@ -537,18 +719,29 @@ public class JournalModel : PageModel
         // Обработка ячеек
         foreach (var compositeKey in allCompositeKeys)
         {
-            if (!TrySplitKey3(compositeKey, out var studentId, out var dateKey, out var topicKey)) continue;
-            if (!DateTime.TryParseExact(dateKey, "yyyyMMdd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var date)) continue;
+            if (!TrySplitKey3(compositeKey, out var studentId, out var dateKey, out var topicKey))
+                continue;
+
+            if (!DateTime.TryParseExact(dateKey, "yyyyMMdd",
+                CultureInfo.InvariantCulture, DateTimeStyles.None, out var date))
+                continue;
+
             date = date.Date;
 
-            // --- ФИКС: инициализация переменных ---
             int? val = null;
             bool? presenceValue = null;
 
             GradesForUpdate.Grades?.TryGetValue(compositeKey, out val);
             GradesForUpdate.Presence?.TryGetValue(compositeKey, out presenceValue);
 
-            // --- ФИКС: topicOverride ---
+            // ✅ ВАЛИДАЦИЯ
+            if (!IsValidGradeValue(val, maxValue))
+            {
+                FlashMessage = $"Некоректна оцінка: допустимо 0–{maxValue} або 30.";
+                return RedirectToPage(new { selectedJournalId = GradesForUpdate.JournalId });
+            }
+
+            // topicOverride по дате (если передали Topics[dateKey])
             string? topicOverride = null;
             if (GradesForUpdate?.Topics != null &&
                 GradesForUpdate.Topics.TryGetValue(dateKey, out var tmpTopic) &&
@@ -557,12 +750,14 @@ public class JournalModel : PageModel
                 topicOverride = tmpTopic.Trim();
             }
 
+            // Определяем тему для ячейки
             string topicForCell =
                 topicOverride ??
                 (existingByDateTopic.TryGetValue((dateKey, topicKey), out var bucket) && bucket.Any()
                     ? (bucket.First().Comment ?? "")
                     : "");
 
+            // гарантируем наличие bucket
             if (!existingByDateTopic.TryGetValue((dateKey, topicKey), out var listForBucket))
             {
                 listForBucket = new List<Grade>();
@@ -581,13 +776,16 @@ public class JournalModel : PageModel
                 {
                     var delResp = await _httpClient.DeleteAsync(ApiUrl($"/api/Grade/{existing.Id}"));
                     if (!delResp.IsSuccessStatusCode) hasError = true;
+
                     listForBucket.Remove(existing);
                     continue;
                 }
 
                 if (val.HasValue) existing.Value = val.Value;
                 if (presenceValue.HasValue) existing.IsPresent = presenceValue;
-                if (!string.IsNullOrWhiteSpace(topicForCell)) existing.Comment = topicForCell;
+
+                if (!string.IsNullOrWhiteSpace(topicForCell))
+                    existing.Comment = topicForCell;
 
                 var updateResp = await _httpClient.PutAsJsonAsync(ApiUrl($"/api/Grade/{existing.Id}"), existing);
                 if (!updateResp.IsSuccessStatusCode) hasError = true;
@@ -605,11 +803,14 @@ public class JournalModel : PageModel
                     Created = date,
                     IsPresent = presenceValue
                 };
+
                 var createResp = await _httpClient.PostAsJsonAsync(ApiUrl("/api/Grade"), newGrade);
                 if (!createResp.IsSuccessStatusCode) hasError = true;
+
                 listForBucket.Add(newGrade);
             }
         }
+
         // Если передали Topics[dateKey] — обновим тему у всех записей бакетов той даты
         if (GradesForUpdate?.Topics != null)
         {
@@ -620,6 +821,7 @@ public class JournalModel : PageModel
                     foreach (var g in kv.Value)
                     {
                         if (g.Comment == newTopic) continue;
+
                         g.Comment = newTopic!;
                         var upd = await _httpClient.PutAsJsonAsync(ApiUrl($"/api/Grade/{g.Id}"), g);
                         if (!upd.IsSuccessStatusCode) hasError = true;
@@ -628,10 +830,12 @@ public class JournalModel : PageModel
             }
         }
 
-        FlashMessage = hasError ? "Під час збереження виникли помилки." : "Зміни успішно збережено.";
+        FlashMessage = hasError
+            ? "Під час збереження виникли помилки."
+            : "Зміни успішно збережено.";
+
         return RedirectToPage(new { selectedJournalId = GradesForUpdate.JournalId });
     }
-
     private sealed class DateTopicComparer : IEqualityComparer<(string dateKey, string topicKey)>
     {
         public bool Equals((string dateKey, string topicKey) x, (string dateKey, string topicKey) y)
@@ -905,6 +1109,24 @@ public class JournalModel : PageModel
         var path = relativePath.StartsWith("/") ? relativePath : "/" + relativePath;
         return $"{Request.Scheme}://{Request.Host}{path}";
     }
+    private async Task<int> GetJournalMaxAsync(Guid journalId)
+    {
+        if (journalId == Guid.Empty) return 12;
+
+        var jr = await _httpClient.GetAsync(ApiUrl($"/api/Journal/{journalId}"));
+        if (!jr.IsSuccessStatusCode) return 12;
+
+        var journal = await jr.Content.ReadFromJsonAsync<JournalEntry>();
+        return journal?.MaxValue > 0 ? journal.MaxValue : 12;
+    }
+
+    private static bool IsValidGradeValue(int? value, int maxValue)
+    {
+        if (!value.HasValue) return true;   // пусто допустимо
+        if (value.Value == 30) return true; // исключение "залік"
+        return value.Value >= 0 && value.Value <= maxValue;
+    }
+
 }
 
 public class CreateJournalModel
