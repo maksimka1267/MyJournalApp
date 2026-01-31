@@ -110,6 +110,12 @@
             <input type="hidden" name="handler" value="DeleteAllJournals" />
             <button class="btn btn-danger">🗑 Видалити всі журнали</button>
         </form>
+        <button class="btn btn-outline-primary"
+                data-bs-toggle="modal"
+                data-bs-target="#editJournalModal"
+                @(selectedJournal == null ? "disabled" : "")>
+            ✏️ Редагувати
+        </button>
     </div>
 }
 @if (Model.Role == "Student")
@@ -484,6 +490,42 @@ else
 {
     <div class="alert alert-info mt-3">Оберіть журнал для перегляду.</div>
 }
+<!-- Модалка редагування назви журналу -->
+<div class="modal fade" id="editJournalModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <form method="post">
+                @Html.AntiForgeryToken()
+                <input type="hidden" name="handler" value="UpdateJournalName" />
+                <input type="hidden" name="EditJournal.Id" value="@Model.SelectedJournalId" />
+
+                <div class="modal-header">
+                    <h5 class="modal-title">Редагувати назву журналу</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label class="form-label">Нова назва</label>
+                        <input type="text"
+                               class="form-control"
+                               name="EditJournal.Name"
+                               value="@(selectedJournal?.Name ?? "")"
+                               required />
+                        <div class="form-text">
+                            Напр.: «Вища математика - КБ-21 (1 семестр 2025/2026)»
+                        </div>
+                    </div>
+                </div>
+
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Скасувати</button>
+                    <button type="submit" class="btn btn-primary">Зберегти</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
 
 <!-- Модалка створення журналу -->
 <div class="modal fade" id="addJournalModal" tabindex="-1" aria-labelledby="addJournalModalLabel" aria-hidden="true">
@@ -520,6 +562,17 @@ else
                     <div class="mb-3">
                         <label class="form-label">Викладач</label>
                         <select name="NewJournal.TeacherId" class="form-select" required>
+                            @foreach (var teacher in Model.Teachers)
+                            {
+                                var name = Model.TeacherNames.GetValueOrDefault(teacher.Id, "Невідомий");
+                                <option value="@teacher.Id">@name</option>
+                            }
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Другий викладач (опціонально)</label>
+                        <select name="NewJournal.SecondTeacherId" class="form-select">
+                            <option value="">— Не обирати —</option>
                             @foreach (var teacher in Model.Teachers)
                             {
                                 var name = Model.TeacherNames.GetValueOrDefault(teacher.Id, "Невідомий");

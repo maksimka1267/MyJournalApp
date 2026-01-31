@@ -24,6 +24,8 @@ public class IndexModel : PageModel
     public readonly Dictionary<Guid, string> _teacherNameCache = new();
     public string Role { get; set; } = "";
     [BindProperty] public string? BulkChangesJson { get; set; }  // заполняет JS
+    [BindProperty] public DateTime StartDate { get; set; }
+    [BindProperty] public DateTime EndDate { get; set; }
 
     // ---- DTOs для клиентской сборки изменений ----
     public class BulkChangeDto
@@ -210,18 +212,37 @@ public class IndexModel : PageModel
         {
             case "ImportLessons":
                 if (Role != "Admin") return Forbid();
+
                 if (Request.Form.Files.Count > 0 && Request.Form.Files["File"] is IFormFile file)
                 {
                     var groupIdRaw = Request.Form["GroupId"];
                     var isNumeratorRaw = Request.Form["IsNumerator"];
-                    if (Guid.TryParse(groupIdRaw, out var groupId) && bool.TryParse(isNumeratorRaw, out var isNumerator))
+                    var startDateRaw = Request.Form["StartDate"];
+                    var endDateRaw = Request.Form["EndDate"];
+
+                    if (Guid.TryParse(groupIdRaw, out var groupId)
+                        && bool.TryParse(isNumeratorRaw, out var isNumerator)
+                        && DateTime.TryParse(startDateRaw, out var startDate)
+                        && DateTime.TryParse(endDateRaw, out var endDate))
                     {
-                        await ImportLessonsAsync(client, file, groupId, isNumerator);
+                        startDate = startDate.Date;
+                        endDate = endDate.Date;
+
+                        if (endDate < startDate)
+                        {
+                            TempData["ErrorMessage"] = "Кінцева дата не може бути раніше за початкову.";
+                            return RedirectToPage(new { SelectedGroupId = groupId, SelectedDate, BulkMode });
+                        }
+
+                        await ImportLessonsAsync(client, file, groupId, isNumerator, startDate, endDate);
+
+                        // возвращаемся на выбранную дату (можно оставить SelectedDate как было)
                         return RedirectToPage(new { SelectedGroupId = groupId, SelectedDate });
                     }
                 }
+
                 TempData["ErrorMessage"] = "Некоректні дані імпорту.";
-                return RedirectToPage(new { SelectedGroupId, SelectedDate });
+                return RedirectToPage(new { SelectedGroupId, SelectedDate, BulkMode });
 
             case "ChangeTeacher":
                 if (Role != "Admin") return Forbid();
@@ -364,12 +385,22 @@ public class IndexModel : PageModel
         await client.PutAsync(ApiUrl($"/api/Lesson/{lesson.Id}"), content);
     }
 
-    private async Task ImportLessonsAsync(HttpClient client, IFormFile file, Guid groupId, bool isNumerator)
+    private async Task ImportLessonsAsync(
+    HttpClient client,
+    IFormFile file,
+    Guid groupId,
+    bool isNumerator,
+    DateTime startDate,
+    DateTime endDate)
     {
         using var content = new MultipartFormDataContent();
         content.Add(new StreamContent(file.OpenReadStream()), "File", file.FileName);
         content.Add(new StringContent(groupId.ToString()), "GroupId");
         content.Add(new StringContent(isNumerator.ToString()), "IsNumerator");
+
+        // НОВЕ: діапазон імпорту
+        content.Add(new StringContent(startDate.ToString("yyyy-MM-dd")), "StartDate");
+        content.Add(new StringContent(endDate.ToString("yyyy-MM-dd")), "EndDate");
 
         await client.PostAsync(ApiUrl("/api/Lesson/import"), content);
     }
@@ -426,7 +457,10 @@ public class IndexModel : PageModel
 
             // НОВОЕ:
             RepeatWeekly = InputLesson.RepeatWeekly,
-            EndDate = InputLesson.EndDate?.Date // null, если одиночный
+            EndDate = InputLesson.EndDate?.Date, // null, если одиночный
+            ForNumerator = InputLesson.ForNumerator,
+            ForDenominator = InputLesson.ForDenominator
+
         };
 
         var json = JsonSerializer.Serialize(lesson);
@@ -519,6 +553,9 @@ public class IndexModel : PageModel
         public int? Clocks { get; set; }
         public bool RepeatWeekly { get; set; }       // чекбокс серії
         public DateTime? EndDate { get; set; }       // дата завершення серії (тільки дата)
+        public bool ForNumerator { get; set; } = false;
+        public bool ForDenominator { get; set; } = false;
+
 
     }
 }

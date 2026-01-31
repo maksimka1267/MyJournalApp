@@ -29,14 +29,21 @@
     private static int GetPairNumber(DateTime lessonStart)
     {
         var t = lessonStart.TimeOfDay;
+
+        // ✅ до 09:00 — номер 0
+        if (t < PairStarts[0])
+            return 0;
+
         for (int i = 0; i < PairStarts.Length - 1; i++)
         {
             var mid = new TimeSpan((PairStarts[i].Ticks + PairStarts[i + 1].Ticks) / 2);
             if (t < mid) return i + 1;
         }
+
         return PairStarts.Length;
     }
 }
+
 
 <h2 class="mb-4">Розклад</h2>
 <p class="text-muted">@Model.SelectedDate.ToString("dddd, dd MMMM yyyy", ukCulture)</p>
@@ -413,7 +420,40 @@ else
                             Створити серію (щотижня)
                         </label>
                     </div>
+                    <!-- НОВЕ: парність серії (показувати тільки якщо RepeatWeekly=true) -->
+                    <div id="repeatParityWrap" class="mb-3" style="display:none;">
+                        <label class="form-label mb-2">Застосувати для:</label>
 
+                        <div class="d-flex gap-4 flex-wrap">
+                            <div class="form-check">
+                                <input class="form-check-input"
+                                       type="checkbox"
+                                       id="forNumerator"
+                                       name="InputLesson.ForNumerator"
+                                       value="true"
+                                       checked />
+                                <label class="form-check-label" for="forNumerator">Чисельник</label>
+                            </div>
+
+                            <div class="form-check">
+                                <input class="form-check-input"
+                                       type="checkbox"
+                                       id="forDenominator"
+                                       name="InputLesson.ForDenominator"
+                                       value="true"
+                                       checked />
+                                <label class="form-check-label" for="forDenominator">Знаменник</label>
+                            </div>
+                        </div>
+
+                        <div class="form-text">
+                            Якщо обидві галочки увімкнені — заняття буде створено щотижня. Якщо лише одна — раз на 2 тижні.
+                        </div>
+
+                        <div class="text-danger small mt-1" id="repeatParityError" style="display:none;">
+                            Оберіть хоча б одну опцію: чисельник або знаменник.
+                        </div>
+                    </div>
                     <div class="mb-3" id="endDateWrap" style="display:none;">
                         <label class="form-label">Дата завершення серії</label>
                         <input type="date"
@@ -457,6 +497,25 @@ else
                             <option value="true" selected>Чисельник</option>
                             <option value="false">Знаменник</option>
                         </select>
+                    </div>
+                    <div class="row g-2">
+                        <div class="col-md-6">
+                            <label class="form-label">Дата початку</label>
+                            <input type="date"
+                                   name="StartDate"
+                                   class="form-control"
+                                   required />
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label">Дата закінчення</label>
+                            <input type="date"
+                                   name="EndDate"
+                                   class="form-control"
+                                   required />
+                        </div>
+                    </div>
+                    <div class="form-text mt-1">
+                        Парність (чисельник/знаменник) рахується від обраної дати початку.
                     </div>
                 </div>
                 <div class="modal-footer">
@@ -812,16 +871,58 @@ else
             setDeleteMode(false);
         })();
                 document.addEventListener("DOMContentLoaded", () => {
-            const cb = document.getElementById('repeatWeekly');
-            const wrap = document.getElementById('endDateWrap');
-            if (!cb || !wrap) return;
-            const toggle = () => {
-                wrap.style.display = cb.checked ? '' : 'none';
-                const endDate = wrap.querySelector('input[name="InputLesson.EndDate"]');
-                if (endDate) endDate.required = cb.checked;
-            };
-            cb.addEventListener('change', toggle);
-            toggle();
+                    const cb = document.getElementById('repeatWeekly');
+                    const endWrap = document.getElementById('endDateWrap');
+
+                    const parityWrap = document.getElementById('repeatParityWrap');
+                    const numCb = document.getElementById('forNumerator');
+                    const denCb = document.getElementById('forDenominator');
+                    const parityErr = document.getElementById('repeatParityError');
+
+                    if (!cb || !endWrap) return;
+
+                    const toggle = () => {
+                        const on = cb.checked;
+
+                        // показати/сховати дату завершення
+                        endWrap.style.display = on ? '' : 'none';
+                        const endDate = endWrap.querySelector('input[name="InputLesson.EndDate"]');
+                        if (endDate) endDate.required = on;
+
+                        // показати/сховати парність
+                        if (parityWrap) parityWrap.style.display = on ? '' : 'none';
+
+                        // якщо серія вимкнена — прибрати помилку
+                        if (!on && parityErr) parityErr.style.display = 'none';
+
+                        validateParity();
+                    };
+
+                    const validateParity = () => {
+                        if (!cb.checked) return true; // не серія — ок
+                        if (!numCb || !denCb) return true;
+
+                        const ok = (numCb.checked || denCb.checked);
+                        if (parityErr) parityErr.style.display = ok ? 'none' : '';
+                        return ok;
+                    };
+
+                    cb.addEventListener('change', toggle);
+                    if (numCb) numCb.addEventListener('change', validateParity);
+                    if (denCb) denCb.addEventListener('change', validateParity);
+
+                    // блокуємо submit модалки, якщо обидві галочки зняті
+                    const form = cb.closest('form');
+                    if (form) {
+                        form.addEventListener('submit', (e) => {
+                            if (!validateParity()) {
+                                e.preventDefault();
+                                e.stopPropagation();
+                            }
+                        });
+                    }
+
+                    toggle();
         });
 
     </script>

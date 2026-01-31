@@ -13,16 +13,19 @@ public class LessonController : ControllerBase
     private readonly IUserRepository _userRepository;
     private readonly IGroupRepository _groupRepository;
 
-    public LessonController(ILessonRepository lessonRepository,
-                            ITeacherRepository teacherRepository,
-                            IUserRepository userRepository,
-                            IGroupRepository groupRepository)
+    public LessonController(
+        ILessonRepository lessonRepository,
+        ITeacherRepository teacherRepository,
+        IUserRepository userRepository,
+        IGroupRepository groupRepository)
     {
         _lessonRepository = lessonRepository;
         _teacherRepository = teacherRepository;
         _userRepository = userRepository;
         _groupRepository = groupRepository;
     }
+
+    /* ====================== GET ====================== */
 
     [Authorize]
     [HttpGet]
@@ -57,29 +60,40 @@ public class LessonController : ControllerBase
         return Ok(lessons);
     }
 
+    /* ====================== CREATE ====================== */
+
     [Authorize]
     [HttpPost]
     public async Task<IActionResult> Create([FromBody] CreateLessonRequest req)
     {
         if (!ModelState.IsValid) return BadRequest(ModelState);
+
         if (req.GroupId == Guid.Empty || req.TeacherId == Guid.Empty)
             return BadRequest("Потрібні GroupId та TeacherId.");
+
         if (req.StartTime == default)
             return BadRequest("Потрібна дата/час початку.");
 
+        // Нормалізація SecondTeacherId: Guid.Empty => null
+        var secondTeacherId = (req.SecondTeacherId.HasValue && req.SecondTeacherId.Value != Guid.Empty)
+            ? req.SecondTeacherId
+            : null;
+
+        // Базовий урок
         var baseLesson = new Lesson
         {
             Id = req.Id == Guid.Empty ? Guid.NewGuid() : req.Id,
             GroupId = req.GroupId,
             TeacherId = req.TeacherId,
+            SecondTeacherId = secondTeacherId,     // ✅ другий викладач
             Name = req.Name ?? "",
             Topic = req.Topic ?? "",
             Homework = req.Homework ?? "",
             StartTime = req.StartTime,
-            Clocks = null
+            Clocks = req.Clocks                     // ✅ години (якщо потрібно)
         };
 
-        // одиночный урок
+        // Одиночний урок
         if (!req.RepeatWeekly || !req.EndDate.HasValue || req.EndDate.Value.Date < req.StartTime.Date)
         {
             await _lessonRepository.AddAsync(baseLesson);
@@ -87,44 +101,61 @@ public class LessonController : ControllerBase
             return CreatedAtAction(nameof(GetById), new { id = baseLesson.Id }, baseLesson);
         }
 
-        // серия по дню недели StartTime — щотижня до EndDate (включно)
-        var list = new List<Lesson>();
+        // Серія: має бути хоча б одна галочка
+        if (!req.ForNumerator && !req.ForDenominator)
+            return BadRequest("Оберіть чисельник/знаменник або обидва.");
+
         var startDate = req.StartTime.Date;
         var endDate = req.EndDate.Value.Date;
+
         var timeOfDay = req.StartTime.TimeOfDay;
         var dayOfWeek = req.StartTime.DayOfWeek;
 
-        // первое попадание нужного дня недели
-        var cursor = startDate;
-        while (cursor.DayOfWeek != dayOfWeek) cursor = cursor.AddDays(1);
+        // Перше попадання потрібного дня тижня (в межах/після startDate)
+        var first = startDate;
+        while (first.DayOfWeek != dayOfWeek) first = first.AddDays(1);
 
-        for (var d = cursor; d <= endDate; d = d.AddDays(7))
+        if (first > endDate)
+            return BadRequest("У заданому діапазоні немає дат для обраного дня тижня.");
+
+        // Якір парності: понеділок тижня, в який потрапляє START (або first — тут однаково, бо same-week/next)
+        var anchorMonday = StartOfWeekMonday(startDate);
+
+        var list = new List<Lesson>();
+
+        // Йдемо ЩОТИЖНЯ і фільтруємо по парності
+        for (var d = first; d <= endDate; d = d.AddDays(7))
         {
+            var weekIndex = (int)Math.Floor((d.Date - anchorMonday).TotalDays / 7.0);
+            var isNumeratorWeek = (weekIndex % 2) == 0;
+
+            if (isNumeratorWeek && !req.ForNumerator) continue;
+            if (!isNumeratorWeek && !req.ForDenominator) continue;
+
             list.Add(new Lesson
             {
                 Id = Guid.NewGuid(),
                 GroupId = req.GroupId,
                 TeacherId = req.TeacherId,
+                SecondTeacherId = secondTeacherId,   // ✅ другий викладач у серії
                 Name = req.Name ?? "",
                 Topic = req.Topic ?? "",
                 Homework = req.Homework ?? "",
                 StartTime = d + timeOfDay,
-                Clocks = null
+                Clocks = req.Clocks
             });
         }
 
         if (list.Count == 0)
-        {
-            await _lessonRepository.AddAsync(baseLesson);
-            await _lessonRepository.SaveChangesAsync();
-            return CreatedAtAction(nameof(GetById), new { id = baseLesson.Id }, baseLesson);
-        }
+            return BadRequest("У заданому діапазоні немає дат для обраної парності.");
 
         await _lessonRepository.AddRangeAsync(list);
         await _lessonRepository.SaveChangesAsync();
 
         return Ok(new { Created = list.Count, FirstId = list.First().Id });
     }
+
+    /* ====================== UPDATE ====================== */
 
     [Authorize]
     [HttpPut("{id}")]
@@ -136,6 +167,7 @@ public class LessonController : ControllerBase
         var existing = await _lessonRepository.GetByIdAsync(id);
         if (existing == null) return NotFound();
 
+        // Назву предмету оновлюємо тільки якщо не порожня
         if (!string.IsNullOrWhiteSpace(updated.Name))
             existing.Name = updated.Name;
 
@@ -145,11 +177,11 @@ public class LessonController : ControllerBase
         if (updated.TeacherId != Guid.Empty)
             existing.TeacherId = updated.TeacherId;
 
-        // Second teacher: Guid.Empty → снять
+        // Другий викладач: Guid.Empty → зняти
         if (updated.SecondTeacherId.HasValue)
             existing.SecondTeacherId = updated.SecondTeacherId == Guid.Empty ? (Guid?)null : updated.SecondTeacherId;
 
-        // null — не трогаем; "" — очистить
+        // null — не чіпаємо; "" — очистити
         if (updated.Topic != null)
             existing.Topic = updated.Topic;
 
@@ -168,6 +200,8 @@ public class LessonController : ControllerBase
         return NoContent();
     }
 
+    /* ====================== IMPORT (Excel) ====================== */
+
     [Authorize]
     [HttpPost("import")]
     public async Task<IActionResult> ImportLessons([FromForm] ImportLessonsDto dto)
@@ -175,18 +209,31 @@ public class LessonController : ControllerBase
         if (dto.File == null || dto.File.Length == 0)
             return BadRequest("Файл порожній");
 
-        // 1) Границы семестра
-        var (semesterStart, semesterEnd) = GetSemesterBounds(DateTime.Today);
+        if (dto.GroupId == Guid.Empty)
+            return BadRequest("Потрібен GroupId.");
 
-        // 2) Удаляем старое расписание внутри семестра для выбранной парности
+        // Діапазон імпорту з UI
+        var rangeStart = dto.StartDate.Date;
+        var rangeEnd = dto.EndDate.Date;
+
+        if (rangeStart == default || rangeEnd == default)
+            return BadRequest("Потрібні StartDate та EndDate.");
+
+        if (rangeEnd < rangeStart)
+            return BadRequest("Кінцева дата раніше за початкову.");
+
+        // Якір парності: понеділок тижня StartDate
+        var anchorMonday = StartOfWeekMonday(rangeStart);
+
+        // 1) Видаляємо старий розклад у межах діапазону тільки для обраної парності
         var allExistingLessons = await _lessonRepository.GetLessonsByGroupIdAsync(dto.GroupId);
 
         var lessonsToDelete = allExistingLessons
-            .Where(l => l.StartTime.Date >= semesterStart.Date && l.StartTime.Date <= semesterEnd.Date)
+            .Where(l => l.StartTime.Date >= rangeStart && l.StartTime.Date <= rangeEnd)
             .Where(l =>
             {
-                int weekNumber = (int)Math.Floor((l.StartTime.Date - semesterStart.Date).TotalDays / 7.0);
-                bool isNumeratorWeek = (weekNumber % 2) == 0;
+                var weekNumber = (int)Math.Floor((l.StartTime.Date - anchorMonday).TotalDays / 7.0);
+                var isNumeratorWeek = (weekNumber % 2) == 0;
                 return isNumeratorWeek == dto.IsNumerator;
             })
             .ToList();
@@ -197,17 +244,18 @@ public class LessonController : ControllerBase
             await _lessonRepository.SaveChangesAsync();
         }
 
-        // 3) Чтение Excel
+        // 2) Читаємо Excel
         using var stream = new MemoryStream();
         await dto.File.CopyToAsync(stream);
         stream.Position = 0;
+
         using var workbook = new XLWorkbook(stream);
         var worksheet = workbook.Worksheets.First();
 
-        // Строка названий дней
+        // Рядок з назвами днів
         var dayColumns = ParseDayColumns(worksheet, 4);
 
-        // 4) Поиск секций ЧИСЕЛЬНИК / ЗНАМЕННИК
+        // 3) Знаходимо секції ЧИСЕЛЬНИК / ЗНАМЕННИК
         var (numeratorRow, denominatorRow, lastRow) = FindSectionRows(worksheet);
 
         int startRow, endRow;
@@ -224,7 +272,7 @@ public class LessonController : ControllerBase
             endRow = lastRow;
         }
 
-        // 5) Парсинг строк выбранной секции
+        // 4) Парсимо вибрану секцію
         var lessons = new List<Lesson>();
         string currentPairNum = "";
 
@@ -244,12 +292,13 @@ public class LessonController : ControllerBase
                 if (string.IsNullOrEmpty(cellValue) || cellValue == "_") continue;
 
                 var lessonsFromCell = await ParseCell(
-                    cellValue, dto, semesterStart, semesterEnd, currentPairNum, day);
+                    cellValue, dto, anchorMonday, rangeStart, rangeEnd, currentPairNum, day);
+
                 lessons.AddRange(lessonsFromCell);
             }
         }
 
-        // 6) Сохраняем
+        // 5) Зберігаємо
         if (lessons.Count > 0)
         {
             await _lessonRepository.AddRangeAsync(lessons);
@@ -284,7 +333,7 @@ public class LessonController : ControllerBase
         public bool Delete { get; set; }
     }
 
-    // Подпись слота исходного (базового) урока
+    // Підпис слота базового уроку (до змін)
     private sealed class SlotSignature
     {
         public TimeSpan Time { get; init; }
@@ -304,9 +353,9 @@ public class LessonController : ControllerBase
         {
             var lT2 = NormalizeSecond(l.SecondTeacherId);
             return l.StartTime.TimeOfDay == Time
-                && string.Equals(l.Name ?? "", Name, StringComparison.Ordinal)
-                && l.TeacherId == TeacherId
-                && lT2 == SecondTeacherId;
+                   && string.Equals(l.Name ?? "", Name, StringComparison.Ordinal)
+                   && l.TeacherId == TeacherId
+                   && lT2 == SecondTeacherId;
         }
 
         private static Guid? NormalizeSecond(Guid? g) =>
@@ -325,6 +374,7 @@ public class LessonController : ControllerBase
         public bool SetTopic { get; set; }
         public bool SetHomework { get; set; }
         public bool SetClocks { get; set; }
+
         public bool HasAny =>
             SetName || SetTeacherId || SetSecondTeacherId || SetTopic || SetHomework || SetClocks;
     }
@@ -344,25 +394,25 @@ public class LessonController : ControllerBase
         if (groupIds.Count != 1) return BadRequest("Усі уроки мають бути однієї групи.");
         var groupId = groupIds[0];
 
-        // Базовый день: реальная точка опоры
+        // Базовий день: реальна точка опори
         var baselineOldList = (await _lessonRepository.GetLessonsByDateAsync(groupId, start))?.ToList()
                               ?? new List<Lesson>();
         var baselineById = baselineOldList.ToDictionary(l => l.Id, l => l);
 
-        // Готовим маски изменений, исходя из конкретных baseline-Id
+        // Готуємо маски змін, виходячи з конкретних baseline-Id
         var changes = new List<SlotChanges>();
 
         foreach (var newL in dto.Lessons)
         {
             if (!baselineById.TryGetValue(newL.Id, out var oldL))
             {
-                // В базовый день нет такого слота — пропускаем
+                // У базовий день немає такого слота — пропускаємо
                 continue;
             }
 
             var ch = new SlotChanges
             {
-                Signature = SlotSignature.From(oldL), // подпись ДО изменений
+                Signature = SlotSignature.From(oldL), // підпис ДО змін
                 NewValues = newL,
                 Delete = newL.Delete
             };
@@ -373,7 +423,7 @@ public class LessonController : ControllerBase
                 if (oldL.TeacherId != newL.TeacherId) ch.SetTeacherId = true;
 
                 var oldT2 = SlotSignature.From(oldL).SecondTeacherId;
-                var newT2 = newL.SecondTeacherId.HasValue && newL.SecondTeacherId != Guid.Empty ? newL.SecondTeacherId : null;
+                var newT2 = (newL.SecondTeacherId.HasValue && newL.SecondTeacherId != Guid.Empty) ? newL.SecondTeacherId : null;
                 if (oldT2 != newT2) ch.SetSecondTeacherId = true;
 
                 if (!string.Equals(oldL.Topic ?? "", newL.Topic ?? "", StringComparison.Ordinal)) ch.SetTopic = true;
@@ -390,7 +440,7 @@ public class LessonController : ControllerBase
 
         int updated = 0, deleted = 0;
 
-        // Идём неделями
+        // Йдемо тижнями
         for (var d = start; d <= end; d = d.AddDays(7))
         {
             var dayLessons = (await _lessonRepository.GetLessonsByDateAsync(groupId, d))?.ToList();
@@ -398,7 +448,7 @@ public class LessonController : ControllerBase
 
             foreach (var ch in changes)
             {
-                // Ищем слот по подписи (старое состояние)
+                // Шукаємо слот по підпису (старий стан)
                 var target = dayLessons.FirstOrDefault(l => ch.Signature.Matches(l));
                 if (target == null) continue;
 
@@ -427,228 +477,7 @@ public class LessonController : ControllerBase
         return Ok(new { Updated = updated, Deleted = deleted });
     }
 
-    /* ====================== ВСПОМОГАТЕЛЬНЫЕ МЕТОДЫ ====================== */
-
-    // Границы семестра.
-    // • Июль–Ноябрь  -> 1-й семестр текущего года: 1.09.Y..31.12.Y
-    // • Декабрь/Январь -> 2-й семестр след. года: 1.01.(Y+1)..30.06.(Y+1)
-    // • Февраль–Июнь -> 2-й семестр текущего года: 1.01.Y..30.06.Y
-    private (DateTime start, DateTime end) GetSemesterBounds(DateTime now)
-    {
-        int y = now.Year;
-
-        if (now.Month >= 7 && now.Month <= 11)
-        {
-            var start = new DateTime(y, 9, 1);
-            var end = new DateTime(y, 12, 31, 23, 59, 59);
-            return (ShiftToMonday(start), end);
-        }
-        else if (now.Month == 12 || now.Month == 1)
-        {
-            var start = new DateTime(y + 1, 1, 1);
-            var end = new DateTime(y + 1, 6, 30, 23, 59, 59);
-            return (ShiftToMonday(start), end);
-        }
-        else
-        {
-            var start = new DateTime(y, 1, 1);
-            var end = new DateTime(y, 6, 30, 23, 59, 59);
-            return (ShiftToMonday(start), end);
-        }
-    }
-
-    private DateTime ShiftToMonday(DateTime d)
-    {
-        while (d.DayOfWeek != DayOfWeek.Monday) d = d.AddDays(1);
-        return d;
-    }
-
-    private (int numeratorRow, int denominatorRow, int lastRow) FindSectionRows(IXLWorksheet worksheet)
-    {
-        int numeratorDataStartRow = 0;
-        int denominatorDataStartRow = 0;
-        int lastRow = worksheet.LastRowUsed().RowNumber();
-
-        for (int r = 1; r <= lastRow; r++)
-        {
-            var headerCell = worksheet.Cell(r, 2).GetString().Trim();
-            if (headerCell.Equals("ЧИСЕЛЬНИК", StringComparison.OrdinalIgnoreCase))
-                numeratorDataStartRow = r + 1;
-            else if (headerCell.Equals("ЗНАМЕННИК", StringComparison.OrdinalIgnoreCase))
-                denominatorDataStartRow = r + 1;
-        }
-
-        return (numeratorDataStartRow, denominatorDataStartRow, lastRow);
-    }
-
-    private Dictionary<string, int> ParseDayColumns(IXLWorksheet worksheet, int daysRowIndex)
-    {
-        var dayColumns = new Dictionary<string, int>();
-        for (int col = 3; col <= worksheet.LastColumnUsed().ColumnNumber(); col++)
-        {
-            var day = worksheet.Cell(daysRowIndex, col).GetString().Trim();
-            if (!string.IsNullOrEmpty(day))
-                dayColumns[day] = col;
-        }
-        return dayColumns;
-    }
-
-    private async Task<IEnumerable<Lesson>> ParseCell(
-        string cellValue,
-        ImportLessonsDto dto,
-        DateTime semesterStart,
-        DateTime semesterEnd,
-        string pairNum,
-        string day)
-    {
-        var result = new List<Lesson>();
-
-        var lines = cellValue.Split('\n', StringSplitOptions.RemoveEmptyEntries);
-        if (lines.Length < 2) return result;
-
-        var subjects = lines[0].Split(',', StringSplitOptions.RemoveEmptyEntries).Select(s => s.Trim()).ToArray();
-        var teachers = lines[1].Split(',', StringSplitOptions.RemoveEmptyEntries).Select(s => s.Trim()).ToArray();
-
-        var dayOfWeek = day switch
-        {
-            "ПОНЕДІЛОК" => DayOfWeek.Monday,
-            "ВІВТОРОК" => DayOfWeek.Tuesday,
-            "СЕРЕДА" => DayOfWeek.Wednesday,
-            "ЧЕТВЕР" => DayOfWeek.Thursday,
-            "П'ЯТНИЦЯ" => DayOfWeek.Friday,
-            _ => DayOfWeek.Monday
-        };
-
-        // 1) два предмета и два учителя → по одному Lesson на каждого
-        if (subjects.Length > 1 && subjects.Length == teachers.Length)
-        {
-            for (int i = 0; i < subjects.Length; i++)
-                result.AddRange(await CreateLessonsForWeeks(
-                    subjects[i], teachers[i], null, dto, semesterStart, semesterEnd, pairNum, dayOfWeek));
-        }
-        // 2) один предмет, несколько учителей → делим на два Lesson (для подгрупп)
-        else if (subjects.Length == 1 && teachers.Length > 1)
-        {
-            string subj = subjects[0];
-            for (int i = 0; i < teachers.Length; i++)
-                result.AddRange(await CreateLessonsForWeeks(
-                    subj, teachers[i], null, dto, semesterStart, semesterEnd, pairNum, dayOfWeek));
-        }
-        // 3) обычный случай
-        else
-        {
-            result.AddRange(await CreateLessonsForWeeks(
-                subjects[0], teachers.First(), null, dto, semesterStart, semesterEnd, pairNum, dayOfWeek));
-        }
-
-        return result;
-    }
-
-    private async Task<IEnumerable<Lesson>> CreateLessonsForWeeks(
-        string subject,
-        string teacher1,
-        string? teacher2,
-        ImportLessonsDto dto,
-        DateTime semesterStart,
-        DateTime semesterEnd,
-        string pairNum,
-        DayOfWeek dayOfWeek)
-    {
-        var result = new List<Lesson>();
-        if (!TryGetLessonStartTime(pairNum, out TimeOnly start)) return result;
-
-        // Сдвиг дня в рамках недели (от понедельника)
-        int offset = ((int)dayOfWeek - (int)DayOfWeek.Monday + 7) % 7;
-
-        for (int week = 0; week < 18; week++)
-        {
-            var weekStart = semesterStart.AddDays(week * 7);
-            if (weekStart.Date > semesterEnd.Date) break;
-
-            bool isNumeratorWeek = (week % 2) == 0;
-            if (!((dto.IsNumerator && isNumeratorWeek) || (!dto.IsNumerator && !isNumeratorWeek)))
-                continue;
-
-            var lessonDate = weekStart.AddDays(offset);
-            if (lessonDate.Date > semesterEnd.Date) break;
-
-            var teacherId1 = await _teacherRepository.GetTeacherIdByFullNameAsync(teacher1);
-
-            var startDateTime = lessonDate.Date + start.ToTimeSpan();
-
-            // Первый учитель (отдельный Lesson)
-            result.Add(new Lesson
-            {
-                Id = Guid.NewGuid(),
-                Name = subject,
-                TeacherId = teacherId1 ?? Guid.Empty,
-                GroupId = dto.GroupId,
-                Topic = "",
-                Homework = "",
-                StartTime = startDateTime,
-                Clocks = null
-            });
-
-            // Если второй указан — создаём еще один Lesson (вторая подгруппа)
-            if (!string.IsNullOrWhiteSpace(teacher2))
-            {
-                var teacherId2 = await _teacherRepository.GetTeacherIdByFullNameAsync(teacher2);
-                if (teacherId2.HasValue && teacherId2.Value != Guid.Empty)
-                {
-                    result.Add(new Lesson
-                    {
-                        Id = Guid.NewGuid(),
-                        Name = subject,
-                        TeacherId = teacherId2.Value,
-                        GroupId = dto.GroupId,
-                        Topic = "",
-                        Homework = "",
-                        StartTime = startDateTime,
-                        Clocks = null
-                    });
-                }
-            }
-        }
-
-        return result;
-    }
-
-    // Мапа начала пары
-    private bool TryGetLessonStartTime(string pairNumRaw, out TimeOnly start)
-    {
-        start = pairNumRaw switch
-        {
-            "1" => new TimeOnly(9, 0),
-            "2" => new TimeOnly(10, 10),
-            "3" => new TimeOnly(11, 20),
-            "4" => new TimeOnly(12, 30),
-            "5" => new TimeOnly(13, 40),
-            "6" => new TimeOnly(14, 50),
-            "7" => new TimeOnly(16, 0),
-            "8" => new TimeOnly(17, 10),
-            _ => default
-        };
-        return start != default;
-    }
-
-    public class ImportLessonsDto
-    {
-        public IFormFile File { get; set; } = null!;
-        public Guid GroupId { get; set; }
-        public bool IsNumerator { get; set; } // true - для числителя, false - для знаменателя
-    }
-
-    [Authorize]
-    [HttpDelete("{id}")]
-    public async Task<IActionResult> Delete(Guid id)
-    {
-        var existing = await _lessonRepository.GetByIdAsync(id);
-        if (existing == null) return NotFound();
-
-        await _lessonRepository.Delete(existing);
-        await _lessonRepository.SaveChangesAsync();
-        return NoContent();
-    }
+    /* ====================== SUBJECTS ====================== */
 
     [Authorize(Roles = "Admin")]
     [HttpGet("group/{groupId}/subjects")]
@@ -665,6 +494,8 @@ public class LessonController : ControllerBase
 
         return Ok(subjects);
     }
+
+    /* ====================== EXPORT ====================== */
 
     [Authorize]
     [HttpGet("export")]
@@ -707,7 +538,6 @@ public class LessonController : ControllerBase
                 groupNameForHeader = group?.Name ?? "Невідома група";
             }
 
-            var teacher = await _teacherRepository.GetByIdAsync(firstLesson.TeacherId);
             var user = await _userRepository.GetByIdAsync(firstLesson.TeacherId);
 
             worksheet.Cell("D2").Value = "Група:";
@@ -717,7 +547,7 @@ public class LessonController : ControllerBase
             worksheet.Cell("D6").Value = "П.І.Б. викладача:";
             worksheet.Cell("E6").Value = user?.FullName ?? "Невідомий";
 
-            // Заголовки таблицы
+            // Заголовки таблиці
             var headerRow = 9;
             worksheet.Cell(headerRow, 1).Value = "Дата занять";
             worksheet.Cell(headerRow, 2).Value = "№ з/п";
@@ -726,7 +556,7 @@ public class LessonController : ControllerBase
             worksheet.Range(headerRow, 1, headerRow, 4).Style.Font.SetBold();
             worksheet.Range(headerRow, 1, headerRow, 4).Style.Fill.SetBackgroundColor(XLColor.LightGray);
 
-            // Данные
+            // Дані
             int currentRow = headerRow + 1;
             int lessonNumber = 1;
             foreach (var lesson in filteredLessons)
@@ -755,20 +585,57 @@ public class LessonController : ControllerBase
         }
     }
 
+    /* ====================== DELETE ====================== */
+
+    [Authorize]
+    [HttpDelete("{id}")]
+    public async Task<IActionResult> Delete(Guid id)
+    {
+        var existing = await _lessonRepository.GetByIdAsync(id);
+        if (existing == null) return NotFound();
+
+        await _lessonRepository.Delete(existing);
+        await _lessonRepository.SaveChangesAsync();
+        return NoContent();
+    }
+
+    /* ====================== DTOs ====================== */
+
+    public class ImportLessonsDto
+    {
+        public IFormFile File { get; set; } = null!;
+        public Guid GroupId { get; set; }
+        public bool IsNumerator { get; set; } // true - для чисельника, false - для знаменника
+
+        public DateTime StartDate { get; set; } // тільки дата
+        public DateTime EndDate { get; set; }   // тільки дата
+    }
+
     public class CreateLessonRequest
     {
         public Guid Id { get; set; }
         public Guid GroupId { get; set; }
         public Guid TeacherId { get; set; }
+
+        // НОВЕ
+        public Guid? SecondTeacherId { get; set; }
+
         public string Name { get; set; } = "";
         public DateTime StartTime { get; set; }
         public string? Topic { get; set; }
         public string? Homework { get; set; }
-        public string? Subject { get; set; }
+
+        // Якщо потрібно — додай
+        public int? Clocks { get; set; }
 
         public bool RepeatWeekly { get; set; }
         public DateTime? EndDate { get; set; }
+
+        // ВАЖЛИВО: без дефолтів true/true
+        public bool ForNumerator { get; set; } = false;
+        public bool ForDenominator { get; set; } = false;
     }
+
 
     public class ExportDto
     {
@@ -777,5 +644,185 @@ public class LessonController : ControllerBase
         public string? SubjectName { get; set; }
         public DateTime? StartDate { get; set; }
         public DateTime? EndDate { get; set; }
+    }
+
+    /* ====================== HELPERS (Import) ====================== */
+
+    // Понеділок тижня, в який потрапляє дата (якір для парності)
+    private static DateTime StartOfWeekMonday(DateTime date)
+    {
+        var d = date.Date;
+        int diff = (7 + (int)d.DayOfWeek - (int)DayOfWeek.Monday) % 7;
+        return d.AddDays(-diff);
+    }
+
+    private (int numeratorRow, int denominatorRow, int lastRow) FindSectionRows(IXLWorksheet worksheet)
+    {
+        int numeratorDataStartRow = 0;
+        int denominatorDataStartRow = 0;
+        int lastRow = worksheet.LastRowUsed().RowNumber();
+
+        for (int r = 1; r <= lastRow; r++)
+        {
+            var headerCell = worksheet.Cell(r, 2).GetString().Trim();
+            if (headerCell.Equals("ЧИСЕЛЬНИК", StringComparison.OrdinalIgnoreCase))
+                numeratorDataStartRow = r + 1;
+            else if (headerCell.Equals("ЗНАМЕННИК", StringComparison.OrdinalIgnoreCase))
+                denominatorDataStartRow = r + 1;
+        }
+
+        return (numeratorDataStartRow, denominatorDataStartRow, lastRow);
+    }
+
+    private Dictionary<string, int> ParseDayColumns(IXLWorksheet worksheet, int daysRowIndex)
+    {
+        var dayColumns = new Dictionary<string, int>();
+        for (int col = 3; col <= worksheet.LastColumnUsed().ColumnNumber(); col++)
+        {
+            var day = worksheet.Cell(daysRowIndex, col).GetString().Trim();
+            if (!string.IsNullOrEmpty(day))
+                dayColumns[day] = col;
+        }
+        return dayColumns;
+    }
+
+    private async Task<IEnumerable<Lesson>> ParseCell(
+        string cellValue,
+        ImportLessonsDto dto,
+        DateTime anchorMonday,
+        DateTime rangeStart,
+        DateTime rangeEnd,
+        string pairNum,
+        string day)
+    {
+        var result = new List<Lesson>();
+
+        var lines = cellValue.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        if (lines.Length < 2) return result;
+
+        var subjects = lines[0].Split(',', StringSplitOptions.RemoveEmptyEntries).Select(s => s.Trim()).ToArray();
+        var teachers = lines[1].Split(',', StringSplitOptions.RemoveEmptyEntries).Select(s => s.Trim()).ToArray();
+
+        var dayOfWeek = day switch
+        {
+            "ПОНЕДІЛОК" => DayOfWeek.Monday,
+            "ВІВТОРОК" => DayOfWeek.Tuesday,
+            "СЕРЕДА" => DayOfWeek.Wednesday,
+            "ЧЕТВЕР" => DayOfWeek.Thursday,
+            "П'ЯТНИЦЯ" => DayOfWeek.Friday,
+            _ => DayOfWeek.Monday
+        };
+
+        // 1) два предмети і два викладачі → по одному Lesson на кожного
+        if (subjects.Length > 1 && subjects.Length == teachers.Length)
+        {
+            for (int i = 0; i < subjects.Length; i++)
+            {
+                result.AddRange(await CreateLessonsForWeeks(
+                    subjects[i], teachers[i], null, dto, anchorMonday, rangeStart, rangeEnd, pairNum, dayOfWeek));
+            }
+        }
+        // 2) один предмет, кілька викладачів → по одному Lesson на кожного (підгрупи)
+        else if (subjects.Length == 1 && teachers.Length > 1)
+        {
+            string subj = subjects[0];
+            for (int i = 0; i < teachers.Length; i++)
+            {
+                result.AddRange(await CreateLessonsForWeeks(
+                    subj, teachers[i], null, dto, anchorMonday, rangeStart, rangeEnd, pairNum, dayOfWeek));
+            }
+        }
+        // 3) звичайний випадок
+        else
+        {
+            result.AddRange(await CreateLessonsForWeeks(
+                subjects[0], teachers.First(), null, dto, anchorMonday, rangeStart, rangeEnd, pairNum, dayOfWeek));
+        }
+
+        return result;
+    }
+
+    private async Task<IEnumerable<Lesson>> CreateLessonsForWeeks(
+        string subject,
+        string teacher1,
+        string? teacher2,
+        ImportLessonsDto dto,
+        DateTime anchorMonday,
+        DateTime rangeStart,
+        DateTime rangeEnd,
+        string pairNum,
+        DayOfWeek dayOfWeek)
+    {
+        var result = new List<Lesson>();
+        if (!TryGetLessonStartTime(pairNum, out TimeOnly start)) return result;
+
+        // Перша дата потрібного дня тижня в межах діапазону
+        var first = rangeStart.Date;
+        while (first.DayOfWeek != dayOfWeek) first = first.AddDays(1);
+        if (first > rangeEnd.Date) return result;
+
+        for (var d = first; d <= rangeEnd.Date; d = d.AddDays(7))
+        {
+            var weekNumber = (int)Math.Floor((d.Date - anchorMonday.Date).TotalDays / 7.0);
+            var isNumeratorWeek = (weekNumber % 2) == 0;
+
+            if (isNumeratorWeek != dto.IsNumerator) continue;
+
+            var teacherId1 = await _teacherRepository.GetTeacherIdByFullNameAsync(teacher1);
+            var startDateTime = d.Date + start.ToTimeSpan();
+
+            // Перший викладач (окремий Lesson)
+            result.Add(new Lesson
+            {
+                Id = Guid.NewGuid(),
+                Name = subject,
+                TeacherId = teacherId1 ?? Guid.Empty,
+                GroupId = dto.GroupId,
+                Topic = "",
+                Homework = "",
+                StartTime = startDateTime,
+                Clocks = null
+            });
+
+            // Якщо є другий викладач — створюємо ще один Lesson (інша підгрупа)
+            if (!string.IsNullOrWhiteSpace(teacher2))
+            {
+                var teacherId2 = await _teacherRepository.GetTeacherIdByFullNameAsync(teacher2);
+                if (teacherId2.HasValue && teacherId2.Value != Guid.Empty)
+                {
+                    result.Add(new Lesson
+                    {
+                        Id = Guid.NewGuid(),
+                        Name = subject,
+                        TeacherId = teacherId2.Value,
+                        GroupId = dto.GroupId,
+                        Topic = "",
+                        Homework = "",
+                        StartTime = startDateTime,
+                        Clocks = null
+                    });
+                }
+            }
+        }
+
+        return result;
+    }
+
+    // Мапа початку пари
+    private bool TryGetLessonStartTime(string pairNumRaw, out TimeOnly start)
+    {
+        start = pairNumRaw switch
+        {
+            "1" => new TimeOnly(9, 0),
+            "2" => new TimeOnly(10, 10),
+            "3" => new TimeOnly(11, 20),
+            "4" => new TimeOnly(12, 30),
+            "5" => new TimeOnly(13, 40),
+            "6" => new TimeOnly(14, 50),
+            "7" => new TimeOnly(16, 0),
+            "8" => new TimeOnly(17, 10),
+            _ => default
+        };
+        return start != default;
     }
 }

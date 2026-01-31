@@ -34,6 +34,14 @@ public class JournalModel : PageModel
 
     public string Role { get; set; } = "";
     public Guid UserId { get; set; }
+    public class EditJournalModel
+    {
+        public Guid Id { get; set; }
+        public string Name { get; set; } = "";
+    }
+
+    [BindProperty] public EditJournalModel EditJournal { get; set; } = new();
+
     public class ExportGradesRequest
     {
         public Guid StudentId { get; set; }
@@ -172,9 +180,57 @@ public class JournalModel : PageModel
             "ExportStudentGrades" => await OnPostExportStudentGradesAsync(),
             "DownloadIndividualPlan" => await OnPostDownloadIndividualPlanAsync(),
             "DownloadJournalExcel" => await OnPostDownloadJournalExcelAsync(),
+            "UpdateJournalName" => await OnPostUpdateJournalNameAsync(),
             _ => await OnGetAsync(SelectedJournalId)
         };
     }
+    public async Task<IActionResult> OnPostUpdateJournalNameAsync()
+    {
+        // Дозволимо тільки Admin (або ще Teacher, якщо хочеш)
+        if (Role != "Admin")
+        {
+            FlashMessage = "Недостатньо прав для редагування назви журналу.";
+            return RedirectToPage(new { selectedJournalId = SelectedJournalId });
+        }
+
+        if (EditJournal.Id == Guid.Empty || string.IsNullOrWhiteSpace(EditJournal.Name))
+        {
+            FlashMessage = "Невірні дані для редагування.";
+            return RedirectToPage(new { selectedJournalId = SelectedJournalId });
+        }
+
+        _httpClient.DefaultRequestHeaders.Authorization =
+            new AuthenticationHeaderValue("Bearer", Request.Cookies["cookies"]);
+
+        // Беремо існуючий журнал, щоб не затирати інші поля (TeacherId, GroupId, тощо)
+        var getResp = await _httpClient.GetAsync(ApiUrl($"/api/Journal/{EditJournal.Id}"));
+        if (!getResp.IsSuccessStatusCode)
+        {
+            FlashMessage = "Журнал не знайдено.";
+            return RedirectToPage(new { selectedJournalId = SelectedJournalId });
+        }
+
+        var journal = await getResp.Content.ReadFromJsonAsync<JournalEntry>();
+        if (journal == null)
+        {
+            FlashMessage = "Журнал не знайдено.";
+            return RedirectToPage(new { selectedJournalId = SelectedJournalId });
+        }
+
+        journal.Name = EditJournal.Name.Trim();
+
+        var putResp = await _httpClient.PutAsJsonAsync(ApiUrl($"/api/Journal/{EditJournal.Id}"), journal);
+
+        if (!putResp.IsSuccessStatusCode)
+        {
+            FlashMessage = "Не вдалося оновити назву журналу.";
+            return RedirectToPage(new { selectedJournalId = SelectedJournalId });
+        }
+
+        FlashMessage = "Назву журналу оновлено.";
+        return RedirectToPage(new { selectedJournalId = EditJournal.Id });
+    }
+
     public async Task<IActionResult> OnPostDownloadJournalExcelAsync()
     {
         ModelState.Remove(nameof(SelectedTeacher)); // чтобы не мешала валидация других форм
@@ -1056,34 +1112,73 @@ public class JournalModel : PageModel
 
     public async Task<IActionResult> OnPostCreateJournalAsync()
     {
-        // минимальная валидация — поля из модалки создания
-        if (NewJournal.GroupId == Guid.Empty || NewJournal.TeacherId == Guid.Empty)
+        // Щоб не ламалася валідація інших форм
+        ModelState.Remove(nameof(SelectedTeacher));
+
+        // Мінімальна валідація
+        if (NewJournal.GroupId == Guid.Empty)
         {
-            ModelState.AddModelError("", "Усі поля мають бути заповнені.");
+            ModelState.AddModelError("", "Оберіть групу.");
             return Page();
         }
 
+        if (NewJournal.TeacherId == Guid.Empty)
+        {
+            ModelState.AddModelError("", "Оберіть викладача.");
+            return Page();
+        }
+
+        if (string.IsNullOrWhiteSpace(NewJournal.Name))
+        {
+            ModelState.AddModelError("", "Вкажіть назву журналу.");
+            return Page();
+        }
+
+        if (NewJournal.MaxValue <= 0)
+        {
+            ModelState.AddModelError("", "Вкажіть коректну максимальну оцінку.");
+            return Page();
+        }
+
+        // Авторизація
+        var token = Request.Cookies["cookies"];
+        if (string.IsNullOrEmpty(token)) return RedirectToPage("/Account/Login");
+
         _httpClient.DefaultRequestHeaders.Authorization =
-            new AuthenticationHeaderValue("Bearer", Request.Cookies["cookies"]);
+            new AuthenticationHeaderValue("Bearer", token);
+
+        // ✅ Збираємо список викладачів (1 або 2)
+        var teacherIds = new List<Guid> { NewJournal.TeacherId };
+
+        if (NewJournal.SecondTeacherId.HasValue
+            && NewJournal.SecondTeacherId.Value != Guid.Empty
+            && NewJournal.SecondTeacherId.Value != NewJournal.TeacherId)
+        {
+            teacherIds.Add(NewJournal.SecondTeacherId.Value);
+        }
 
         var newJournal = new JournalEntry
         {
             Id = Guid.NewGuid(),
-            Name = NewJournal.Name,
+            Name = NewJournal.Name.Trim(),
             MaxValue = NewJournal.MaxValue,
             Date = DateTime.UtcNow,
             Subject = "створено вручну",
             GroupId = NewJournal.GroupId,
-            TeacherId = new List<Guid> { NewJournal.TeacherId },
+            TeacherId = teacherIds,
             Comment = ""
         };
 
         var resp = await _httpClient.PostAsJsonAsync(ApiUrl("/api/Journal"), newJournal);
         var body = await resp.Content.ReadAsStringAsync();
         Console.WriteLine($"POST /api/Journal -> {(int)resp.StatusCode} {resp.StatusCode}\n{body}");
+
         if (resp.IsSuccessStatusCode)
         {
-            FlashMessage = "Журнал успішно створено";
+            FlashMessage = teacherIds.Count > 1
+                ? "Журнал успішно створено (призначено 2 викладачів)."
+                : "Журнал успішно створено.";
+
             return RedirectToPage();
         }
 
@@ -1136,6 +1231,7 @@ public class CreateJournalModel
     public int MaxValue { get; set; }
     public Guid GroupId { get; set; }
     public Guid TeacherId { get; set; }
+    public Guid? SecondTeacherId { get; set; }
 }
 
 public class GenerationResult
