@@ -5,129 +5,55 @@ using Microsoft.AspNetCore.Mvc;
 [Route("api/[controller]")]
 public class AcademicProcessController : ControllerBase
 {
-    private readonly IAcademicEventRepository _eventRepository;
-    private readonly IGroupRepository _groupRepository;
+    private readonly IAcademicProcessService _academicProcessService;
 
-    public AcademicProcessController(IAcademicEventRepository eventRepository,
-                                     IGroupRepository groupRepository)
+    public AcademicProcessController(IAcademicProcessService academicProcessService)
     {
-        _eventRepository = eventRepository;
-        _groupRepository = groupRepository;
+        _academicProcessService = academicProcessService;
     }
 
     [HttpGet("{groupId}/{year}")]
     public async Task<IActionResult> GetByGroupAndYear(Guid groupId, int year)
     {
-        var events = await _eventRepository.GetByGroupAndYearAsync(groupId, year);
+        var events = await _academicProcessService.GetByGroupAndYearAsync(groupId, year);
         return Ok(events);
     }
 
     [HttpPost]
     public async Task<IActionResult> AddEvent([FromBody] AcademicEventDto dto)
     {
-        var academicEvent = new AcademicEvent
-        {
-            Id = Guid.NewGuid(),
-            GroupId = dto.GroupId,
-            Type = dto.Type,
-            Year = dto.Year,
-            Month = dto.Month,
-            WeekNumber = dto.WeekNumber,
-            StartDate = dto.StartDate,
-            EndDate = dto.EndDate
-        };
-
-        await _eventRepository.AddAsync(academicEvent);
-        await _eventRepository.SaveChangesAsync();
-
-        return Ok(academicEvent);
+        var result = await _academicProcessService.AddEventAsync(dto);
+        return Ok(result);
     }
 
     [HttpPut("{id}")]
     public async Task<IActionResult> UpdateEvent(Guid id, [FromBody] AcademicEventDto dto)
     {
-        var existing = await _eventRepository.GetByIdAsync(id);
-        if (existing == null) return NotFound();
+        var result = await _academicProcessService.UpdateEventAsync(id, dto);
 
-        existing.Type = dto.Type;
-        existing.Year = dto.Year;
-        existing.Month = dto.Month;
-        existing.WeekNumber = dto.WeekNumber;
-        existing.StartDate = dto.StartDate;
-        existing.EndDate = dto.EndDate;
+        if (result == null)
+            return NotFound();
 
-        await _eventRepository.Update(existing);
-        await _eventRepository.SaveChangesAsync();
-
-        return Ok(existing);
+        return Ok(result);
     }
 
     [Authorize]
     [HttpDelete("{id}")]
     public async Task<IActionResult> DeleteEvent(Guid id)
     {
-        var existing = await _eventRepository.GetByIdAsync(id);
-        if (existing == null) return NotFound();
+        var deleted = await _academicProcessService.DeleteEventAsync(id);
 
-        await _eventRepository.Delete(existing);
-        await _eventRepository.SaveChangesAsync();
+        if (!deleted)
+            return NotFound();
 
         return Ok("Deleted");
     }
+
     [Authorize]
     [HttpPut("bulk")]
     public async Task<IActionResult> BulkUpdate([FromBody] List<AcademicEventDto> events)
     {
-        foreach (var dto in events)
-        {
-            var existing = await _eventRepository.GetByIdAsync(dto.Id);
-            if (existing == null)
-            {
-                // 👇 Вставляем новую запись
-                var newEvent = new AcademicEvent
-                {
-                    Id = dto.Id,
-                    GroupId = dto.GroupId,
-                    Type = dto.Type,
-                    Year = dto.Year,
-                    Month = dto.Month,
-                    WeekNumber = dto.WeekNumber,
-                    StartDate = dto.StartDate,
-                    EndDate = dto.EndDate
-                };
-
-                await _eventRepository.AddAsync(newEvent);
-                continue;
-            }
-
-            // 👇 Обновление
-            existing.Type = dto.Type;
-            existing.Year = dto.Year;
-            existing.Month = dto.Month;
-            existing.WeekNumber = dto.WeekNumber;
-            existing.StartDate = dto.StartDate;
-            existing.EndDate = dto.EndDate;
-
-            await _eventRepository.Update(existing);
-        }
-
-        await _eventRepository.SaveChangesAsync();
+        await _academicProcessService.BulkUpdateAsync(events);
         return Ok();
-    }
-    public class AcademicEventDto
-    {
-        public Guid Id { get; set; }
-        public Guid GroupId { get; set; }
-        public AcademicWeekType Type { get; set; }
-        public int Year { get; set; }
-        public int Month { get; set; }
-        public int WeekNumber { get; set; }
-        public DateTime StartDate { get; set; }
-        public DateTime EndDate { get; set; }
-    }
-
-    public class AcademicEventUploadDto
-    {
-        public IFormFile File { get; set; }
     }
 }

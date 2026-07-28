@@ -26,6 +26,8 @@ public class IndexModel : PageModel
     [BindProperty] public string? BulkChangesJson { get; set; }  // заполняет JS
     [BindProperty] public DateTime StartDate { get; set; }
     [BindProperty] public DateTime EndDate { get; set; }
+    [BindProperty]
+    public ExportSemesterLessonsFormDto ExportSemester { get; set; } = new();
 
     // ---- DTOs для клиентской сборки изменений ----
     public class BulkChangeDto
@@ -39,7 +41,12 @@ public class IndexModel : PageModel
         public DateTime StartDate { get; set; }  // yyyy-MM-dd из data-lesson-date (дата базового дня)
         public bool? Delete { get; set; }        // true => удалить слот по диапазону
     }
+    public class ExportSemesterLessonsFormDto
+    {
+        public int Year { get; set; }
 
+        public int Semester { get; set; }
+    }
     // ---- DTO, который отправляем в API /api/Lesson/bulk-apply ----
     public class BulkApplyLessonDto
     {
@@ -243,6 +250,9 @@ public class IndexModel : PageModel
 
                 TempData["ErrorMessage"] = "Некоректні дані імпорту.";
                 return RedirectToPage(new { SelectedGroupId, SelectedDate, BulkMode });
+            case "ExportSemesterHours":
+                if (Role != "Admin") return Forbid();
+                return await OnPostExportSemesterAsync();
 
             case "ChangeTeacher":
                 if (Role != "Admin") return Forbid();
@@ -282,7 +292,60 @@ public class IndexModel : PageModel
                 return RedirectToPage(new { SelectedGroupId, SelectedDate });
         }
     }
+    private async Task<IActionResult> OnPostExportSemesterAsync()
+    {
+        var token = Request.Cookies["cookies"];
+        if (string.IsNullOrEmpty(token))
+            return Unauthorized();
 
+        var client = _httpClientFactory.CreateClient();
+        client.DefaultRequestHeaders.Authorization =
+            new AuthenticationHeaderValue("Bearer", token);
+
+        var dto = new
+        {
+            Year = ExportSemester.Year,
+            Semester = ExportSemester.Semester
+        };
+
+        var content = new StringContent(
+            JsonSerializer.Serialize(dto),
+            Encoding.UTF8,
+            "application/json");
+
+        var response = await client.PostAsync(
+            ApiUrl("/api/Lesson/export/semester"),
+            content);
+
+        if (!response.IsSuccessStatusCode)
+        {
+            TempData["ErrorMessage"] =
+                "Не вдалося сформувати звіт за семестр.";
+            return RedirectToPage(new
+            {
+                SelectedGroupId,
+                SelectedDate,
+                BulkMode
+            });
+        }
+
+        var fileBytes = await response.Content.ReadAsByteArrayAsync();
+
+        var contentType =
+            response.Content.Headers.ContentType?.MediaType
+            ?? "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+
+        var fileName =
+            response.Content.Headers.ContentDisposition?.FileNameStar
+            ?? response.Content.Headers.ContentDisposition?.FileName
+            ?? $"Semester_{ExportSemester.Year}_{ExportSemester.Semester}.xlsx";
+
+        return File(
+            fileBytes,
+            contentType,
+            fileName.Trim('"'));
+    }
+    
     private async Task ApplyBulkChangesAsync()
     {
         var token = Request.Cookies["cookies"];
@@ -455,12 +518,11 @@ public class IndexModel : PageModel
             StartTime = InputLesson.StartTime,
             Subject = "доданий вручну",
 
-            // НОВОЕ:
             RepeatWeekly = InputLesson.RepeatWeekly,
-            EndDate = InputLesson.EndDate?.Date, // null, если одиночный
-            ForNumerator = InputLesson.ForNumerator,
-            ForDenominator = InputLesson.ForDenominator
+            EndDate = InputLesson.EndDate?.Date,
 
+            ForNumerator = InputLesson.ForNumerator == 1 ? 1 : 0,
+            ForDenominator = InputLesson.ForDenominator == 1 ? 1 : 0
         };
 
         var json = JsonSerializer.Serialize(lesson);
@@ -553,8 +615,8 @@ public class IndexModel : PageModel
         public int? Clocks { get; set; }
         public bool RepeatWeekly { get; set; }       // чекбокс серії
         public DateTime? EndDate { get; set; }       // дата завершення серії (тільки дата)
-        public bool ForNumerator { get; set; } = false;
-        public bool ForDenominator { get; set; } = false;
+        public int ForNumerator { get; set; } = 0;
+        public int ForDenominator { get; set; } = 0;
 
 
     }

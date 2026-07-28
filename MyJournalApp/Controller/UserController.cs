@@ -1,7 +1,7 @@
 ﻿using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
-using MyJournalApp.Data.Models;
-using MyJournalApp.Interface;
+using MyJournalApp.Data.Dtos.User;
+using MyJournalApp.Service.Interface;
 
 namespace MyJournalApp.Controllers;
 
@@ -9,127 +9,95 @@ namespace MyJournalApp.Controllers;
 [Route("api/[controller]")]
 public class UserController : ControllerBase
 {
-    private readonly IStudentRepository _studentRepository;
-    private readonly IUserRepository _userRepository;
-    private readonly ITeacherRepository _teacherRepository;
+    private readonly IUserService _userService;
 
-    public UserController(
-        IStudentRepository studentRepository,
-        ITeacherRepository teacherRepository,
-        IUserRepository userRepository)
+    public UserController(IUserService userService)
     {
-        _studentRepository = studentRepository;
-        _teacherRepository = teacherRepository;
-        _userRepository = userRepository;
+        _userService = userService;
     }
+
     [Authorize]
     [HttpPut("update-teacher-admin")]
-    public async Task<IActionResult> UpdateTeacherAdmin([FromBody] UpdateTeacherAdminDto dto)
+    public async Task<IActionResult> UpdateTeacherAdmin(UpdateTeacherAdminDto dto)
     {
-        var teacher = await _teacherRepository.GetByIdAsync(dto.TeacherId);
-        if (teacher == null)
-            return NotFound("Teacher not found");
+        var result = await _userService.UpdateTeacherAdminAsync(dto);
 
-        teacher.IsAdmin = dto.IsAdmin;
-        await _teacherRepository.Update(teacher);
-        await _teacherRepository.SaveChangesAsync();
-
-        return Ok("Teacher admin status updated");
+        return result
+            ? Ok("Teacher admin status updated")
+            : NotFound("Teacher not found");
     }
 
-    public class UpdateTeacherAdminDto
-    {
-        public Guid TeacherId { get; set; }
-        public bool IsAdmin { get; set; }
-    }
     [Authorize]
     [HttpGet("teachers-admin-status")]
     public async Task<IActionResult> GetTeachersAdminStatus()
     {
-        var teachers = await _teacherRepository.GetAllTeachersWithAdminAsync();
-        return Ok(teachers);
+        return Ok(await _userService.GetTeachersAdminStatusAsync());
     }
-    // Отримати всіх вчителів
+
     [Authorize]
     [HttpGet("teachers")]
     public async Task<IActionResult> GetAllTeachers()
     {
-        var teachers = await _teacherRepository.GetAllTeachersAsync();
-        return Ok(teachers);
+        return Ok(await _userService.GetAllTeachersAsync());
     }
-    // Отримати всіх користувачів
+
     [Authorize]
     [HttpGet("users")]
-    public async Task<IActionResult> GetAllAsync()
+    public async Task<IActionResult> GetAllUsers()
     {
-        var users = await _userRepository.GetAllAsync();
-        return Ok(users);
+        return Ok(await _userService.GetAllUsersAsync());
     }
-    // Отримати всіх студентів
+
     [Authorize]
     [HttpGet("students")]
     public async Task<IActionResult> GetAllStudents()
     {
-        var students = await _studentRepository.GetAllStudentsAsync();
-        return Ok(students);
+        return Ok(await _userService.GetAllStudentsAsync());
     }
+
     [Authorize]
     [HttpPut("{studentId}/change-group/{newGroupId}")]
     public async Task<IActionResult> ChangeGroup(Guid studentId, Guid newGroupId)
     {
-        var student = await _studentRepository.GetByIdAsync(studentId);
-        if (student == null) return NotFound();
+        var result = await _userService.ChangeStudentGroupAsync(studentId, newGroupId);
 
-        student.GroupId = newGroupId;
-        await _studentRepository.Update(student);
-
-        return NoContent();
+        return result
+            ? NoContent()
+            : NotFound();
     }
+
     [Authorize]
     [HttpDelete("delete/{id}")]
     public async Task<IActionResult> Delete(Guid id)
     {
-        var user = await _userRepository.GetByIdAsync(id);
-        if (user == null) return NotFound();
+        var result = await _userService.DeleteUserAsync(id);
 
-        await _userRepository.Delete(user);
-        await _userRepository.SaveChangesAsync();
-        return Ok();
+        return result
+            ? Ok()
+            : NotFound();
     }
+
     [HttpDelete("delete-all")]
     public async Task<IActionResult> DeleteAllUsers()
     {
-        try
+        await _userService.DeleteAllUsersAsync();
+
+        return Ok(new
         {
-            await _userRepository.DeleteAllAsync();
-            return Ok(new { message = "Усі користувачі видалені." });
-        }
-        catch (Exception ex)
-        {
-            return StatusCode(500, new { message = "Ошибка при видалені користувачей", error = ex.Message });
-        }
+            message = "Усі користувачі видалені."
+        });
     }
+
     [Authorize]
     [HttpGet("by-group/{groupId}")]
     public async Task<IActionResult> GetStudentsByGroup(Guid groupId)
     {
         if (groupId == Guid.Empty)
-        {
             return BadRequest("Неверный ID группы.");
-        }
 
-        // Вызываем новый эффективный метод из репозитория
-        var users = await _studentRepository.GetUsersByGroupIdAsync(groupId);
-
-        // Проверяем, найдены ли студенты. Возвращаем пустой список, если нет.
-        if (users == null)
-        {
-            return Ok(new List<User>());
-        }
-
-        return Ok(users);
+        return Ok(await _userService.GetStudentsByGroupAsync(groupId));
     }
-    // Отримати одного вчителя
+
     [Authorize]
     [HttpGet("teacher")]
     public async Task<IActionResult> GetTeachersByIds([FromQuery] List<Guid> ids)
@@ -137,70 +105,50 @@ public class UserController : ControllerBase
         if (ids == null || ids.Count == 0)
             return BadRequest("No teacher IDs provided.");
 
-        var teachers = await _userRepository.GetByIdsAsync(ids.Distinct());
-        return Ok(teachers);
+        return Ok(await _userService.GetTeachersByIdsAsync(ids));
     }
 
     [Authorize]
     [HttpGet("teacher-model/{id}")]
     public async Task<IActionResult> GetTeacherModelById(Guid id)
     {
-        var teacher = await _teacherRepository.GetByIdAsync(id);
-        return teacher is null ? NotFound() : Ok(teacher);
+        var teacher = await _userService.GetTeacherModelAsync(id);
+
+        return teacher == null
+            ? NotFound()
+            : Ok(teacher);
     }
+
     [Authorize]
     [HttpGet("teacher/{id}")]
     public async Task<IActionResult> GetTeacherById(Guid id)
     {
-        var teacher = await _userRepository.GetByIdAsync(id);
-        return teacher is null ? NotFound() : Ok(teacher);
+        var teacher = await _userService.GetTeacherAsync(id);
+
+        return teacher == null
+            ? NotFound()
+            : Ok(teacher);
     }
-    // Отримати одного студента
+
     [Authorize]
     [HttpGet("student/{id}")]
     public async Task<IActionResult> GetStudentById(Guid id)
     {
-        var student = await _studentRepository.GetByIdAsync(id);
-        return student is null ? NotFound() : Ok(student);
+        var student = await _userService.GetStudentAsync(id);
+
+        return student == null
+            ? NotFound()
+            : Ok(student);
     }
-    // UserController.cs (добавить в класс)
+
     [Authorize]
     [HttpPut("update-basic")]
-    public async Task<IActionResult> UpdateBasic([FromBody] UpdateUserBasicDto dto)
+    public async Task<IActionResult> UpdateBasic(UpdateUserBasicDto dto)
     {
-        if (dto.UserId == Guid.Empty)
-            return BadRequest("UserId is required.");
+        var user = await _userService.UpdateBasicAsync(dto);
 
-        var user = await _userRepository.GetByIdAsync(dto.UserId);
-        if (user is null) return NotFound();
-
-        bool changed = false;
-
-        if (!string.IsNullOrWhiteSpace(dto.FullName) && dto.FullName != user.FullName)
-        {
-            user.FullName = dto.FullName.Trim();
-            changed = true;
-        }
-
-        if (!string.IsNullOrWhiteSpace(dto.Email) && dto.Email != user.Email)
-        {
-            user.Email = dto.Email.Trim();
-            changed = true;
-        }
-
-        if (changed)
-        {
-            await _userRepository.Update(user);
-            await _userRepository.SaveChangesAsync();
-        }
-
-        return Ok(user);
-    }
-
-    public class UpdateUserBasicDto
-    {
-        public Guid UserId { get; set; }
-        public string? FullName { get; set; }
-        public string? Email { get; set; }
+        return user == null
+            ? NotFound()
+            : Ok(user);
     }
 }

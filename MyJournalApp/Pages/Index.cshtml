@@ -67,7 +67,9 @@
             <button class="btn btn-outline-dark" data-bs-toggle="modal" data-bs-target="#exportHoursModal">
                 ⬇️ Витягнути години
             </button>
-
+            <button class="btn btn-outline-success"data-bs-toggle="modal"data-bs-target="#exportSemesterHoursModal">
+                📊 Години за семестр
+            </button>
             @* Переключатель режима масового редактирования *@
             @if (!Model.BulkMode)
             {
@@ -92,7 +94,21 @@
     }
 </div>
 
-<a class="btn btn-outline-dark mb-3" href="?SelectedGroupId=@Model.SelectedGroupId&SelectedDate=@DateTime.Today.ToString("yyyy-MM-dd")">📅 Поточний тиждень</a>
+<div class="d-flex align-items-center gap-2 mb-3 flex-wrap">
+    <a class="btn btn-outline-dark"
+       href="?SelectedGroupId=@Model.SelectedGroupId&SelectedDate=@DateTime.Today.ToString("yyyy-MM-dd")">
+        📅 Поточний тиждень
+    </a>
+
+    <div class="input-group" style="max-width: 260px;">
+        <span class="input-group-text">🗓</span>
+        <input type="date"
+               id="weekPicker"
+               class="form-control"
+               value="@Model.SelectedDate.ToString("yyyy-MM-dd")"
+               aria-label="Обрати дату тижня" />
+    </div>
+</div>
 
 <div class="d-flex justify-content-between mb-3">
     <div class="d-flex gap-2">
@@ -430,22 +446,26 @@ else
                                        type="checkbox"
                                        id="forNumerator"
                                        name="InputLesson.ForNumerator"
-                                       value="true"
+                                       value="1"
                                        checked />
-                                <label class="form-check-label" for="forNumerator">Чисельник</label>
-                            </div>
 
+                                <label class="form-check-label" for="forNumerator">
+                                    Чисельник
+                                </label>
+                            </div>
                             <div class="form-check">
-                                <input class="form-check-input"
-                                       type="checkbox"
-                                       id="forDenominator"
-                                       name="InputLesson.ForDenominator"
-                                       value="true"
-                                       checked />
-                                <label class="form-check-label" for="forDenominator">Знаменник</label>
-                            </div>
-                        </div>
+                            <input class="form-check-input"
+                                   type="checkbox"
+                                   id="forDenominator"
+                                   name="InputLesson.ForDenominator"
+                                   value="1"
+                                   checked />
 
+                            <label class="form-check-label" for="forDenominator">
+                                Знаменник
+                            </label>
+                        </div>
+                        </div>
                         <div class="form-text">
                             Якщо обидві галочки увімкнені — заняття буде створено щотижня. Якщо лише одна — раз на 2 тижні.
                         </div>
@@ -631,7 +651,69 @@ else
         </div>
     </div>
 </div>
+<div class="modal fade" id="exportSemesterHoursModal" tabindex="-1">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <form method="post">
+                @Html.AntiForgeryToken()
 
+                <input type="hidden"
+                       name="handler"
+                       value="ExportSemesterHours" />
+
+                <div class="modal-header">
+                    <h5 class="modal-title">
+                        Години за семестр
+                    </h5>
+
+                    <button type="button"
+                            class="btn-close"
+                            data-bs-dismiss="modal">
+                    </button>
+                </div>
+
+                <div class="modal-body">
+
+                    <div class="mb-3">
+                        <label class="form-label">
+                            Навчальний рік(початок)
+                        </label>
+                        <input type="number"
+                               class="form-control"
+                               name="ExportSemester.Year"
+                               value="@DateTime.Now.Year"
+                               min="2020"
+                               max="2100"
+                               required />
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label">
+                            Семестр
+                        </label>
+
+                        <select class="form-select"
+                                name="ExportSemester.Semester"
+                                required>
+                            <option value="1">1 семестр</option>
+                            <option value="2">2 семестр</option>
+                        </select>
+                    </div>
+
+                </div>
+
+                <div class="modal-footer">
+                    <button class="btn btn-success w-100"
+                            type="submit">
+                        📥 Завантажити Excel
+                    </button>
+                </div>
+
+            </form>
+
+        </div>
+    </div>
+</div>
 <div class="modal fade" id="changeTeacherModal" tabindex="-1">
     <div class="modal-dialog">
         <div class="modal-content">
@@ -924,6 +1006,24 @@ else
 
                     toggle();
         });
+        document.addEventListener("DOMContentLoaded", () => {
+    const picker = document.getElementById("weekPicker");
+    if (!picker) return;
+
+    picker.addEventListener("change", () => {
+        const d = picker.value; // yyyy-MM-dd
+        if (!d) return;
+
+        const url = new URL(window.location.href);
+        url.searchParams.set("SelectedGroupId", "@Model.SelectedGroupId");
+        url.searchParams.set("SelectedDate", d);
+
+        // BulkMode лучше сбрасывать при смене недели
+        url.searchParams.set("BulkMode", "false");
+
+        window.location.href = url.toString();
+    });
+});
 
     </script>
 

@@ -23,6 +23,12 @@ public class GroupRepository : Repository<Group>, IGroupRepository
             .Select(g => g.Name)
             .FirstOrDefaultAsync();
     }
+    public async Task<List<Group>> GetByIdsAsync(List<Guid> ids)
+    {
+        return await _context.Groups
+            .Where(x => ids.Contains(x.Id))
+            .ToListAsync();
+    }
     public async Task<IEnumerable<Group>> GetGroupsWithLessonsAsync()
     {
         var groupIdsWithLessons = await _context.Lessons

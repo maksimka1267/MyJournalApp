@@ -31,10 +31,6 @@ public class GradeController : ControllerBase
     {
         try
         {
-            Console.WriteLine("ID Journal:",grade.JournalEntryId);
-            Console.WriteLine("ID Student:",grade.StudentId);
-            Console.WriteLine("Value:",grade.Value);
-            Console.WriteLine("Comment:",grade.Comment);
             if(grade.Value == 0)
             {
                 grade.Value = null;
@@ -45,8 +41,6 @@ public class GradeController : ControllerBase
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"❌ Error saving grade: {ex.Message}");
-            Console.WriteLine(ex.StackTrace);
             return StatusCode(500, $"Internal error: {ex.Message}");
         }
     }
@@ -59,12 +53,12 @@ public class GradeController : ControllerBase
 
         existing.Value = grade.Value;
         existing.Comment = grade.Comment;
-        existing.IsPresent = grade.IsPresent;          // <-- раньше терялось
+        existing.IsPresent = grade.IsPresent;
 
         await _gradeRepo.Update(existing);
+        await _gradeRepo.SaveChangesAsync();
         return Ok(existing);
     }
-    // 👇 ДОБАВЬТЕ ЭТОТ НОВЫЙ ЭНДПОИНТ
     [Authorize]
     [HttpGet("journal/{journalId}/date/{date:datetime}")]
     public async Task<IActionResult> GetByJournalAndDate(Guid journalId, DateTime date)

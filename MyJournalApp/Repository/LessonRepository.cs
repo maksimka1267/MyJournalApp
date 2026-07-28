@@ -23,7 +23,18 @@ public class LessonRepository : Repository<Lesson>, ILessonRepository
             .OrderBy(n => n)
             .ToListAsync();
     }
-
+    public async Task<List<Lesson>> GetByPeriodAsync(DateTime start, DateTime end)
+    {
+        return await _dbSet
+            .AsNoTracking()
+            .Where(l => l.StartTime >= start &&
+                        l.StartTime < end)
+            .OrderBy(l => l.GroupId)
+            .ThenBy(l => l.Name)
+            .ThenBy(l => l.TeacherId)
+            .ThenBy(l => l.StartTime)
+            .ToListAsync();
+    }
     public async Task<List<Lesson>> GetByTeacherAsync(
         Guid teacherId, DateTime from, DateTime to, Guid? groupId, string? subject)
     {
@@ -49,15 +60,30 @@ public class LessonRepository : Repository<Lesson>, ILessonRepository
             .ToListAsync();
     }
 
-    public async Task DeleteLessonsAsync(IEnumerable<Lesson> lessons)
+    public Task DeleteLessonsAsync(IEnumerable<Lesson> lessons)
     {
         _dbSet.RemoveRange(lessons);
-        await _context.SaveChangesAsync();
+        return Task.CompletedTask;
     }
 
     public async Task AddRangeAsync(IEnumerable<Lesson> lessons)
     {
-        _dbSet.AddRange(lessons);
-        await _context.SaveChangesAsync();
+        await _dbSet.AddRangeAsync(lessons);
+    }
+    public async Task<List<Lesson>> GetByGroupAsync(
+    Guid groupId,
+    DateTime start,
+    DateTime end)
+    {
+        return await _dbSet
+            .AsNoTracking()
+            .Where(x =>
+                x.GroupId == groupId &&
+                x.StartTime >= start &&
+                x.StartTime <= end)
+            .OrderBy(x => x.Name)
+            .ThenBy(x => x.TeacherId)
+            .ThenBy(x => x.StartTime)
+            .ToListAsync();
     }
 }

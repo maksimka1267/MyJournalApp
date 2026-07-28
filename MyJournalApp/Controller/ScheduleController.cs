@@ -1,30 +1,32 @@
 ﻿using Microsoft.AspNetCore.Mvc;
+using MyJournalApp.Service.Interface;
 
 [ApiController]
 [Route("api/[controller]")]
 public class ScheduleController : ControllerBase
 {
-    private readonly IScheduleRepository _scheduleRepository;
-    private readonly ILessonRepository _lessonRepository;
+    private readonly IScheduleService _scheduleService;
 
-    public ScheduleController(IScheduleRepository scheduleRepository, ILessonRepository lessonRepository)
+    public ScheduleController(IScheduleService scheduleService)
     {
-        _scheduleRepository = scheduleRepository;
-        _lessonRepository = lessonRepository;
+        _scheduleService = scheduleService;
     }
 
     [HttpGet]
     public async Task<IActionResult> GetAll()
     {
-        var schedules = await _scheduleRepository.GetAllAsync();
+        var schedules = await _scheduleService.GetAllAsync();
         return Ok(schedules);
     }
 
     [HttpGet("{id}")]
     public async Task<IActionResult> GetById(Guid id)
     {
-        var schedule = await _scheduleRepository.GetByIdAsync(id);
-        if (schedule == null) return NotFound();
+        var schedule = await _scheduleService.GetByIdAsync(id);
+
+        if (schedule == null)
+            return NotFound();
+
         return Ok(schedule);
     }
 
@@ -34,94 +36,68 @@ public class ScheduleController : ControllerBase
         if (!DateOnly.TryParse(weekStart, out var weekStartDate))
             return BadRequest("Invalid date format. Use YYYY-MM-DD.");
 
-        var schedule = await _scheduleRepository.GetByGroupAndWeekAsync(groupId, weekStartDate);
-        if (schedule == null) return NotFound();
+        var schedule = await _scheduleService.GetByGroupAndWeekAsync(groupId, weekStartDate);
+
+        if (schedule == null)
+            return NotFound();
 
         return Ok(schedule);
     }
 
     [HttpPost]
-    public async Task<IActionResult> Create(Schedule schedule)
+    public async Task<IActionResult> Create([FromBody] Schedule schedule)
     {
         if (!ModelState.IsValid)
             return BadRequest(ModelState);
 
         try
         {
-            // Проверка, не существует ли уже расписание
-            var existing = await _scheduleRepository.GetByGroupAndWeekAsync(schedule.GroupId, schedule.WeekStartDate);
-            if (existing != null)
-                return Conflict("Schedule already exists for this group and week.");
+            var created = await _scheduleService.CreateAsync(schedule);
 
-            // Проверка всех уроков
-            foreach (var lessonId in schedule.Lessons)
-            {
-                var lesson = await _lessonRepository.GetByIdAsync(lessonId);
-                if (lesson == null)
-                    return BadRequest($"Lesson with ID {lessonId} does not exist.");
-            }
-
-            await _scheduleRepository.AddAsync(schedule);
-            await _scheduleRepository.SaveChangesAsync();
-
-            return CreatedAtAction(nameof(GetById), new { id = schedule.Id }, schedule);
+            return CreatedAtAction(
+                nameof(GetById),
+                new { id = created.Id },
+                created);
         }
-        catch (Exception ex)
+        catch (ArgumentException ex)
         {
-            return StatusCode(500, $"Server error: {ex.Message}");
+            return BadRequest(ex.Message);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Conflict(ex.Message);
         }
     }
 
     [HttpPut("{id}")]
-    public async Task<IActionResult> Update(Guid id, Schedule updated)
+    public async Task<IActionResult> Update(Guid id, [FromBody] Schedule schedule)
     {
         if (!ModelState.IsValid)
             return BadRequest(ModelState);
 
         try
         {
-            var existing = await _scheduleRepository.GetByIdAsync(id);
-            if (existing == null) return NotFound();
+            var updated = await _scheduleService.UpdateAsync(id, schedule);
 
-            // Проверка всех уроков
-            foreach (var lessonId in updated.Lessons)
-            {
-                var lesson = await _lessonRepository.GetByIdAsync(lessonId);
-                if (lesson == null)
-                    return BadRequest($"Lesson with ID {lessonId} does not exist.");
-            }
-
-            existing.GroupId = updated.GroupId;
-            existing.WeekStartDate = updated.WeekStartDate;
-            existing.Lessons = updated.Lessons;
-
-            await _scheduleRepository.Update(existing);
-            await _scheduleRepository.SaveChangesAsync();
+            if (!updated)
+                return NotFound();
 
             return NoContent();
         }
-        catch (Exception ex)
+        catch (ArgumentException ex)
         {
-            return StatusCode(500, $"Server error: {ex.Message}");
+            return BadRequest(ex.Message);
         }
     }
 
     [HttpDelete("{id}")]
     public async Task<IActionResult> Delete(Guid id)
     {
-        try
-        {
-            var existing = await _scheduleRepository.GetByIdAsync(id);
-            if (existing == null) return NotFound();
+        var deleted = await _scheduleService.DeleteAsync(id);
 
-            await _scheduleRepository.Delete(existing);
-            await _scheduleRepository.SaveChangesAsync();
+        if (!deleted)
+            return NotFound();
 
-            return NoContent();
-        }
-        catch (Exception ex)
-        {
-            return StatusCode(500, $"Server error: {ex.Message}");
-        }
+        return NoContent();
     }
 }

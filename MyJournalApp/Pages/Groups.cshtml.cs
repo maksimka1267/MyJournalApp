@@ -1,6 +1,7 @@
 ﻿using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
+using MyJournalApp.Data.Dtos.GroupFiles;
 using MyJournalApp.Data.Models;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;

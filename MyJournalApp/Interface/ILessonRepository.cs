@@ -9,8 +9,12 @@
         DateTime to,
         Guid? groupId,
         string? subject);
+    Task<List<Lesson>> GetByGroupAsync(
+    Guid groupId,
+    DateTime start,
+    DateTime end);
     Task<List<string>> GetSubjectsByTeacherAsync(Guid teacherId, DateTime start, DateTime end);
-
+    Task<List<Lesson>> GetByPeriodAsync(DateTime start, DateTime end);
     Task AddRangeAsync(IEnumerable<Lesson> lessons);
 
 }

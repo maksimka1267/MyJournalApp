@@ -1,7 +1,9 @@
 ﻿using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
+using MyJournalApp.Data.Dtos.Journal;
 using MyJournalApp.Data.Models;
 using System.Globalization;
+using System.IO.Compression;
 using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
@@ -31,7 +33,7 @@ public class JournalColumn
 public class JournalModel : PageModel
 {
     private readonly HttpClient _httpClient;
-
+   
     public string Role { get; set; } = "";
     public Guid UserId { get; set; }
     public class EditJournalModel
@@ -39,6 +41,16 @@ public class JournalModel : PageModel
         public Guid Id { get; set; }
         public string Name { get; set; } = "";
     }
+    // ✅ Діапазон для Student (передається в query): /Journal?from=2026-02-01&to=2026-02-10
+    [BindProperty(SupportsGet = true)]
+    public DateOnly? From { get; set; }
+
+    [BindProperty(SupportsGet = true)]
+    public DateOnly? To { get; set; }
+
+    // ✅ Фактичний діапазон (для UI)
+    public DateOnly StudentFrom { get; set; }
+    public DateOnly StudentTo { get; set; }
 
     [BindProperty] public EditJournalModel EditJournal { get; set; } = new();
 
@@ -48,7 +60,10 @@ public class JournalModel : PageModel
         public DateTime StartDate { get; set; }
         public DateTime EndDate { get; set; }
     }
-    [BindProperty] public ExportGradesRequest ExportGrades { get; set; } = new();
+    [BindProperty]
+    public ExportGradesRequest ExportGrades { get; set; } = new();
+    [BindProperty]
+    public SemesterExportModel SemesterExport { get; set; } = new();
     public List<JournalEntry> Journals { get; set; } = new();
     public List<Grade> Grades { get; set; } = new();
     public List<Student> Students { get; set; } = new();
@@ -96,7 +111,42 @@ public class JournalModel : PageModel
         // базовые данные
         switch (Role)
         {
-            case "Student": await LoadStudentView(); break;
+            case "Student":
+                {
+                    await LoadStudentView();
+
+                    var today = DateOnly.FromDateTime(DateTime.Today);
+
+                    // ✅ дефолт: поточний тиждень (якщо from/to не передали)
+                    static DateOnly GetWeekStartLocal(DateOnly d)
+                    {
+                        int dow = (int)d.DayOfWeek;          // Sunday=0
+                        int diff = dow == 0 ? 6 : (dow - 1); // Пн
+                        return d.AddDays(-diff);
+                    }
+
+                    var defFrom = GetWeekStartLocal(today);
+                    var defTo = defFrom.AddDays(6);
+
+                    StudentFrom = From ?? defFrom;
+                    StudentTo = To ?? defTo;
+
+                    // ✅ нормалізація: якщо переплутали місцями — міняємо
+                    if (StudentTo < StudentFrom)
+                        (StudentFrom, StudentTo) = (StudentTo, StudentFrom);
+
+                    // ✅ фільтр оцінок студента по обраному періоду (включно)
+                    Grades = Grades
+                        .Where(g =>
+                        {
+                            var d = DateOnly.FromDateTime(g.Created);
+                            return d >= StudentFrom && d <= StudentTo;
+                        })
+                        .ToList();
+
+                    break;
+                }
+
             case "Teacher": await LoadTeacherBaseData(); break;
             case "Admin": await LoadAdminBaseData(); break;
         }
@@ -143,10 +193,7 @@ public class JournalModel : PageModel
             })
             // 1) Дата: старые даты левее, новые правее
             .OrderBy(x => x.Date)
-            // 2) Внутри одной даты: СТАРЕЙШАЯ колонка левее, НОВЕЙШАЯ правее
-            .ThenBy(x => x.FirstCreated)   // ⬅️ ВАЖНО: именно по возрастанию
-            .ThenBy(x => x.LastCreated)
-            .ThenBy(x => x.TieKey)
+            .ThenBy(x => x.FirstCreated)
             .Select(x => new JournalColumn
             {
                 Date = x.Date,
@@ -180,6 +227,7 @@ public class JournalModel : PageModel
             "ExportStudentGrades" => await OnPostExportStudentGradesAsync(),
             "DownloadIndividualPlan" => await OnPostDownloadIndividualPlanAsync(),
             "DownloadJournalExcel" => await OnPostDownloadJournalExcelAsync(),
+            "DownloadSemesterZip" => await OnPostDownloadSemesterZipAsync(),
             "UpdateJournalName" => await OnPostUpdateJournalNameAsync(),
             _ => await OnGetAsync(SelectedJournalId)
         };
@@ -269,6 +317,92 @@ public class JournalModel : PageModel
                           ?? "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
 
         return File(bytes, contentType, cdName.Trim('"'));
+    }
+    public async Task<IActionResult> OnPostDownloadSemesterZipAsync()
+    {
+        var token = Request.Cookies["cookies"];
+        if (string.IsNullOrEmpty(token))
+            return RedirectToPage("/Account/Login");
+        _httpClient.DefaultRequestHeaders.Authorization =
+            new AuthenticationHeaderValue("Bearer", token);
+        var request = new ExportSemesterRequestDto
+        {
+            Year = SemesterExport.Year,
+            Semester = SemesterExport.Semester,
+            GroupId = SemesterExport.GroupId ?? Guid.Empty
+        };
+        // Если выбрана конкретная группа
+        if (request.GroupId != Guid.Empty)
+        {
+            var response = await _httpClient.PostAsJsonAsync(
+                ApiUrl("/api/JournalExport/semester"),
+                request);
+            if (!response.IsSuccessStatusCode)
+            {
+                TempData["ErrorMessage"] =
+                    "Не вдалося сформувати журнал.";
+                return RedirectToPage();
+            }
+            var bytes = await response.Content.ReadAsByteArrayAsync();
+            return File(
+                bytes,
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                $"Semester_{request.Year}_{request.Semester}.xlsx");
+        }
+        // Если группа не выбрана - все группы
+        var journalsResponse = await _httpClient.PostAsJsonAsync(
+            ApiUrl("/api/JournalExport/semester/journals"),
+            request);
+        if (!journalsResponse.IsSuccessStatusCode)
+        {
+            TempData["ErrorMessage"] =
+                "Не знайдено журналів.";
+            return RedirectToPage();
+        }
+        var journals =
+            await journalsResponse.Content
+                .ReadFromJsonAsync<List<JournalExportItemDto>>();
+        if (journals == null || journals.Count == 0)
+        {
+            TempData["ErrorMessage"] =
+                "Журнали відсутні.";
+            return RedirectToPage();
+        }
+        using var zipStream = new MemoryStream();
+        using (var archive = new ZipArchive(
+            zipStream,
+            ZipArchiveMode.Create,
+            true))
+        {
+            foreach (var group in journals.GroupBy(x => x.GroupId))
+            {
+                var exportRequest = new ExportSemesterRequestDto
+                {
+                    Year = request.Year,
+                    Semester = request.Semester,
+                    GroupId = group.Key
+                };
+                var excelResponse =
+                    await _httpClient.PostAsJsonAsync(
+                        ApiUrl("/api/JournalExport/semester"),
+                        exportRequest);
+                if (!excelResponse.IsSuccessStatusCode)
+                    continue;
+                var excelBytes =await excelResponse.Content.ReadAsByteArrayAsync();
+                var groupName =
+                    group.First().GroupName;
+                var entry =
+                    archive.CreateEntry(
+                        $"{groupName}.xlsx");
+                await using var entryStream =
+                    entry.Open();
+                await entryStream.WriteAsync(excelBytes);
+            }
+        }
+        return File(
+            zipStream.ToArray(),
+            "application/zip",
+            $"Semester_{request.Year}_{request.Semester}.zip");
     }
     private async Task<IActionResult> OnPostDownloadIndividualPlanAsync()
     {
@@ -821,9 +955,8 @@ public class JournalModel : PageModel
             }
 
             var existing = listForBucket.FirstOrDefault(g =>
-                g.StudentId == studentId &&
-                g.JournalEntryId == GradesForUpdate.JournalId &&
-                g.Created.Date == date);
+    g.StudentId == studentId &&
+    g.JournalEntryId == GradesForUpdate.JournalId);
 
             if (existing != null)
             {
@@ -856,7 +989,7 @@ public class JournalModel : PageModel
                     Value = val ?? 0,
                     Comment = topicForCell,
                     TeacherId = UserId,
-                    Created = date,
+                    Created = date.Add(DateTime.Now.TimeOfDay),
                     IsPresent = presenceValue
                 };
 
@@ -1204,24 +1337,6 @@ public class JournalModel : PageModel
         var path = relativePath.StartsWith("/") ? relativePath : "/" + relativePath;
         return $"{Request.Scheme}://{Request.Host}{path}";
     }
-    private async Task<int> GetJournalMaxAsync(Guid journalId)
-    {
-        if (journalId == Guid.Empty) return 12;
-
-        var jr = await _httpClient.GetAsync(ApiUrl($"/api/Journal/{journalId}"));
-        if (!jr.IsSuccessStatusCode) return 12;
-
-        var journal = await jr.Content.ReadFromJsonAsync<JournalEntry>();
-        return journal?.MaxValue > 0 ? journal.MaxValue : 12;
-    }
-
-    private static bool IsValidGradeValue(int? value, int maxValue)
-    {
-        if (!value.HasValue) return true;   // пусто допустимо
-        if (value.Value == 30) return true; // исключение "залік"
-        return value.Value >= 0 && value.Value <= maxValue;
-    }
-
 }
 
 public class CreateJournalModel
@@ -1254,4 +1369,12 @@ public class UpdateDayGradesModel
     // Опционально: переименовать тему у ВСЕХ колонок выбранной даты.
     // Ключ: "yyyymmdd"
     public Dictionary<string, string?> Topics { get; set; } = new();
+}
+public class SemesterExportModel
+{
+    public int Year { get; set; }
+
+    public int Semester { get; set; }
+
+    public Guid? GroupId { get; set; }
 }

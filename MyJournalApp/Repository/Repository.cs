@@ -12,36 +12,42 @@ public class Repository<T> : IRepository<T> where T : class
         _dbSet = _context.Set<T>();
     }
 
-    // Совпадает с интерфейсом: Task<IEnumerable<T>>
     public async Task<IEnumerable<T>> GetAllAsync() =>
         await _dbSet.AsNoTracking().ToListAsync();
 
-    // Также AsNoTracking и без FindAsync (чтобы не держать трекинг)
     public async Task<T?> GetByIdAsync(Guid id) =>
         await _dbSet.AsNoTracking()
             .SingleOrDefaultAsync(e => EF.Property<Guid>(e, "Id") == id);
 
     public async Task AddAsync(T entity)
     {
-        _dbSet.Add(entity);
+        await _dbSet.AddAsync(entity);
         await _context.SaveChangesAsync();
     }
-    public async Task UpdateRange(IEnumerable<T> entities)
+    public Task AddRangeAsync(IEnumerable<T> entities)
     {
-        _dbSet.UpdateRange(entities);
-        await _context.SaveChangesAsync();
+        _dbSet.AddRange(entities);
+        return Task.CompletedTask;
     }
 
-    public async Task Update(T entity)
+    public Task Update(T entity)
     {
         _dbSet.Update(entity);
-        await _context.SaveChangesAsync();
+        _context.SaveChangesAsync();
+        return Task.CompletedTask;
     }
 
-    public async Task Delete(T entity)
+    public Task UpdateRange(IEnumerable<T> entities)
+    {
+        _dbSet.UpdateRange(entities);
+        return Task.CompletedTask;
+    }
+
+    public Task Delete(T entity)
     {
         _dbSet.Remove(entity);
-        await _context.SaveChangesAsync();
+        _context.SaveChangesAsync();
+        return Task.CompletedTask;
     }
 
     public async Task DeleteAllAsync()
@@ -50,5 +56,8 @@ public class Repository<T> : IRepository<T> where T : class
         await _context.SaveChangesAsync();
     }
 
-    public Task SaveChangesAsync() => _context.SaveChangesAsync();
+    public Task SaveChangesAsync()
+    {
+        return _context.SaveChangesAsync();
+    }
 }

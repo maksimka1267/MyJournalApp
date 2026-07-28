@@ -56,8 +56,6 @@ public class AcademicEventRepository : Repository<AcademicEvent>, IAcademicEvent
                 _context.AcademicEvents.Add(e);
             }
         }
-
-        await _context.SaveChangesAsync();
     }
 }
 

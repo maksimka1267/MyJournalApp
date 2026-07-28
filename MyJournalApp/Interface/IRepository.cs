@@ -2,10 +2,18 @@
 {
     Task<IEnumerable<T>> GetAllAsync();
     Task<T?> GetByIdAsync(Guid id);
+
     Task AddAsync(T entity);
+
+    Task AddRangeAsync(IEnumerable<T> entities);
+
     Task Update(T entity);
+
     Task UpdateRange(IEnumerable<T> entities);
+
     Task Delete(T entity);
+
     Task DeleteAllAsync();
+
     Task SaveChangesAsync();
 }

@@ -110,11 +110,19 @@
             <input type="hidden" name="handler" value="DeleteAllJournals" />
             <button class="btn btn-danger">🗑 Видалити всі журнали</button>
         </form>
+
         <button class="btn btn-outline-primary"
                 data-bs-toggle="modal"
                 data-bs-target="#editJournalModal"
                 @(selectedJournal == null ? "disabled" : "")>
             ✏️ Редагувати
+        </button>
+        <button type="button"
+                class="btn btn-outline-primary"
+                data-bs-toggle="modal"
+                data-bs-target="#semesterExportModal">
+            <i class="bi bi-download me-1"></i>
+            Завантажити журнали
         </button>
     </div>
 }
@@ -221,6 +229,27 @@
             @if (Model.Role == "Student")
             {
                 var studentId = Model.UserId;
+                <div class="d-flex flex-wrap gap-2 align-items-center mb-3">
+                    <button type="button" class="btn btn-outline-primary" data-bs-toggle="modal" data-bs-target="#pickDatesModal">
+                        📅 Обрати дати
+                    </button>
+                    @{
+                        var monday = DateOnly.FromDateTime(DateTime.Today);
+                        var dow = (int)monday.DayOfWeek; // Sunday=0
+                        var diff = dow == 0 ? 6 : (dow - 1);
+                        monday = monday.AddDays(-diff);
+                    }
+                    <button type="button"
+                            class="btn btn-outline-secondary"
+                            onclick="window.location.href='@Url.Page("/Journal", null, new { weekStart = monday.ToString("yyyy-MM-dd") }, null)'">
+                        ⏱ Поточний тиждень
+                    </button>
+
+                    <span class="text-muted">
+                        Період: <strong>@Model.StudentFrom.ToString("dd.MM.yyyy")</strong> –
+                        <strong>@Model.StudentTo.ToString("dd.MM.yyyy")</strong>
+                    </span>
+                </div>
 
                 // шапка — единый пул дат по всем оценкам студента
                 var allDates = Model.Grades
@@ -229,7 +258,16 @@
                 .Distinct()
                 .OrderBy(d => d)
                 .ToList();
-
+                @if (!allDates.Any())
+                {
+                    <div class="alert alert-info mt-3">
+                        За обраний період оцінок ще немає.
+                    </div>
+                }
+                else
+                {
+                    <!-- твоя поточна таблиця -->
+                }
                 <table class="table table-bordered mt-4">
                     <thead class="table-light">
                         <tr>
@@ -589,6 +627,103 @@ else
         </div>
     </div>
 </div>
+<!-- Завантаження журналів -->
+<div class="modal fade" id="semesterExportModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <form method="post">
+                @Html.AntiForgeryToken()
+                <input type="hidden"
+                       name="handler"
+                       value="DownloadSemesterZip" />
+                <div class="modal-header">
+                    <h5 class="modal-title">
+                        Завантаження журналів
+                    </h5>
+                    <button type="button"
+                            class="btn-close"
+                            data-bs-dismiss="modal">
+                    </button>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label class="form-label">
+                            Навчальний рік(початок)
+                        </label>
+                        <input type="number"
+                               class="form-control"
+                               name="SemesterExport.Year"
+                               value="@DateTime.Now.Year"
+                               min="2020"
+                               max="2100"
+                               required />
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">
+                            Семестр
+                        </label>
+                        <select class="form-select"
+                                name="SemesterExport.Semester"
+                                required>
+                            <option value="1">
+                                I семестр
+                            </option>
+                            <option value="2">
+                                II семестр
+                            </option>
+                        </select>
+                    </div>
+                    <div class="form-check mb-3">
+                        <input type="hidden"
+                               name="SemesterExport.OnlyOneGroup"
+                               value="false" />
+
+                        <input class="form-check-input"
+                               type="checkbox"
+                               id="onlyOneGroup"
+                               name="SemesterExport.OnlyOneGroup"
+                               value="true">
+                        <label class="form-check-label"
+                               for="onlyOneGroup">
+                            Завантажити лише журнали вибраної групи
+                        </label>
+                    </div>
+                    <div id="groupSelectBlock" style="display:none;">
+                        <div class="mb-3">
+                            <label class="form-label">
+                                Група
+                            </label>
+                            <select class="form-select"
+                                    name="SemesterExport.GroupId">
+                                <option value="">
+                                    Всі групи
+                                </option>
+                                @foreach (var group in Model.GroupNames.OrderBy(x => x.Value))
+                                {
+                                    <option value="@group.Key">
+                                        @group.Value
+                                    </option>
+                                }
+                            </select>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button"
+                            class="btn btn-secondary"
+                            data-bs-dismiss="modal">
+                        Скасувати
+                    </button>
+                    <button type="submit"
+                            class="btn btn-success">
+                        <i class="bi bi-download me-1"></i>
+                        Завантажити
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
 <!-- Модалка витягу оцінок студента -->
 <div class="modal fade" id="exportStudentGradesModal" tabindex="-1" aria-hidden="true">
     <div class="modal-dialog">
@@ -656,6 +791,7 @@ else
                                 <option value="Річна">Річна</option>
                                 <option value="Підсумкова">Підсумкова</option>
                                 <option value="Захист КП/КР">Захист КП/КР</option>
+                                <option value="Захист ДП">Захист ДП</option>
                             </select>
                         </div>
                         <div class="col-md-6">
@@ -691,6 +827,43 @@ else
                     {
                         <button type="submit" class="btn btn-primary">Зберегти колонку</button>
                     }
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+<!-- Модалка вибору діапазону дат (Student) -->
+<div class="modal fade" id="pickDatesModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <form method="get">
+                <div class="modal-header">
+                    <h5 class="modal-title">Обрати діапазон дат</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+
+                <div class="modal-body">
+                    <div class="row g-2">
+                        <div class="col">
+                            <label class="form-label">З</label>
+                            <input type="date" name="from" class="form-control"
+                                   value="@Model.StudentFrom.ToString("yyyy-MM-dd")" required />
+                        </div>
+                        <div class="col">
+                            <label class="form-label">По</label>
+                            <input type="date" name="to" class="form-control"
+                                   value="@Model.StudentTo.ToString("yyyy-MM-dd")" required />
+                        </div>
+                    </div>
+
+                    <div class="form-text mt-2">
+                        Після підтвердження будуть показані оцінки лише в цьому періоді.
+                    </div>
+                </div>
+
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Скасувати</button>
+                    <button type="submit" class="btn btn-primary">Показати</button>
                 </div>
             </form>
         </div>
@@ -889,6 +1062,21 @@ else
             setTimeout(syncTopWidth, 0);
             setTimeout(syncTopWidth, 100);
         }
+                    const onlyOneGroup = document.getElementById("onlyOneGroup");
+    const groupSelectBlock = document.getElementById("groupSelectBlock");
 
+    if (onlyOneGroup && groupSelectBlock) {
+
+        function toggleGroupBlock() {
+            groupSelectBlock.style.display =
+                onlyOneGroup.checked ? "block" : "none";
+        }
+
+        // при открытии страницы
+        toggleGroupBlock();
+
+        // при изменении галочки
+        onlyOneGroup.addEventListener("change", toggleGroupBlock);
+    }
     });
 </script>

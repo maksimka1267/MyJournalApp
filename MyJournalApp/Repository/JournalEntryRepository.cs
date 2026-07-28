@@ -28,7 +28,6 @@ public class JournalEntryRepository : Repository<JournalEntry>, IJournalEntryRep
     public async Task AddRangeAsync(IEnumerable<JournalEntry> entries)
     {
         await _context.JournalEntries.AddRangeAsync(entries);
-        await _context.SaveChangesAsync();
     }
     public async Task<List<(Guid GroupId, string Name)>> GetJournalNamesWithGroupAsync(IEnumerable<Guid> groupIds)
     {
@@ -37,5 +36,10 @@ public class JournalEntryRepository : Repository<JournalEntry>, IJournalEntryRep
             .Select(j => new ValueTuple<Guid, string>(j.GroupId, j.Name))
             .ToListAsync();
     }
-
+    public async Task<List<JournalEntry>> GetByPeriodAsync(DateTime start, DateTime end)
+    {
+        return await _context.JournalEntries
+            .Where(x => x.Date >= start && x.Date <= end)
+            .ToListAsync();
+    }
 }

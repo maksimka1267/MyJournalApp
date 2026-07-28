@@ -1,5 +1,6 @@
 ﻿using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using MyJournalApp.Auth;
@@ -10,6 +11,8 @@ using MyJournalApp.Jwt;
 using MyJournalApp.Repository;
 using MyJournalApp.Service;
 using System.Text;
+using System.IO;
+using MyJournalApp.Service.Interface;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -17,10 +20,16 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddControllersWithViews();
 builder.Services.AddRazorPages();
 
+// Data Protection (ключи для cookie/JWT)
+builder.Services.AddDataProtection()
+    .PersistKeysToFileSystem(
+        new DirectoryInfo(@"C:\Inetpub\vhosts\zap-construct.com.ua\dp-keys"))
+    .SetApplicationName("eJournal");
+
 // HTTP Client for API calls in Razor Pages
 builder.Services.AddHttpClient("ApiClient", c =>
 {
-    c.BaseAddress = new Uri("/api/", UriKind.Relative); // обратим внимание на завершающий слэш
+    c.BaseAddress = new Uri("/api/", UriKind.Relative);
 });
 
 // HttpContextAccessor для Razor Pages
@@ -84,6 +93,22 @@ builder.Services.AddScoped<IJournalEntryRepository, JournalEntryRepository>();
 builder.Services.AddScoped<IScheduleRepository, ScheduleRepository>();
 builder.Services.AddScoped<IAcademicEventRepository, AcademicEventRepository>();
 builder.Services.AddScoped<IJournalGenerationService, JournalGenerationService>();
+builder.Services.AddScoped<IAcademicProcessService, AcademicProcessService>();
+builder.Services.AddScoped<IAuthService, AuthService>();
+builder.Services.AddScoped<IGroupService, GroupService>();
+builder.Services.AddScoped<IJournalService, JournalService>();
+builder.Services.AddScoped<IJournalExportService, JournalExportService>();
+builder.Services.AddScoped<IGroupFilesService, GroupFilesService>();
+builder.Services.AddScoped<IIndividualPlanService, IndividualPlanService>();
+builder.Services.AddScoped<ILessonBulkService, LessonBulkService>();
+builder.Services.AddScoped<ILessonExportService, LessonExportService>();
+builder.Services.AddScoped<ILessonImportService, LessonImportService>();
+builder.Services.AddScoped<ILessonService, LessonService>();
+builder.Services.AddScoped<IScheduleService, ScheduleService>();
+builder.Services.AddScoped<IUserService, UserService>();
+builder.Services.AddScoped<IReportService, ReportService>();
+builder.Services.AddScoped<IStudentGradesExportService, StudentGradesExportService>();
+builder.Services.AddScoped<IStudentGradesReportService, StudentGradesReportService>();
 
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
