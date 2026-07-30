@@ -20,6 +20,6 @@ public interface IGroupService
     Task<ServiceResult<Group>> UpdateAsync(Guid id, Group group);
 
     Task<IServiceResult> DeleteAsync(Guid id);
-
+    Task<List<User>> GetStudentsByGroupAsync(Guid groupId);
     Task<ServiceResult<BulkGroupImportResultDto>> BulkImportAsync(BulkGroupImportDto dto);
 }

@@ -9,6 +9,9 @@
     var isTeacher = Model.Role == "Teacher";
     var isStudent = Model.Role == "Student";
 
+    var isDirector = isTeacher && (Model.CurrentTeacher?.IsDirector ?? false);
+    var canManageSchedule = isAdmin || isDirector;
+    var isAdminTeacher = isTeacher && (Model.CurrentTeacher?.IsAdmin ?? false);
     var userId = User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
     var selectedDateTime = Model.SelectedDate.ToDateTime(TimeOnly.FromDateTime(DateTime.Now));
     var ukCulture = new CultureInfo("uk-UA");
@@ -47,7 +50,6 @@
 
 <h2 class="mb-4">Розклад</h2>
 <p class="text-muted">@Model.SelectedDate.ToString("dddd, dd MMMM yyyy", ukCulture)</p>
-
 <div class="d-flex justify-content-between align-items-center mb-3">
     @if (isAdmin)
     {
@@ -60,13 +62,14 @@
             </select>
             <input type="hidden" name="SelectedDate" value="@Model.SelectedDate.ToString("yyyy-MM-dd")" />
         </form>
-
         <div class="d-flex align-items-center gap-2">
-            <button class="btn btn-dark" data-bs-toggle="modal" data-bs-target="#addLessonModal">➕ Додати заняття</button>
-
             <button class="btn btn-outline-dark" data-bs-toggle="modal" data-bs-target="#exportHoursModal">
                 ⬇️ Витягнути години
             </button>
+        </div>
+        <div class="d-flex align-items-center gap-2">
+            <button class="btn btn-dark" data-bs-toggle="modal" data-bs-target="#addLessonModal">➕ Додати заняття</button>
+
             <button class="btn btn-outline-success"data-bs-toggle="modal"data-bs-target="#exportSemesterHoursModal">
                 📊 Години за семестр
             </button>
@@ -90,6 +93,13 @@
                     🗑 Масове видалення
                 </button>
             }
+        </div>
+    }else if (isTeacher)
+    {
+        <div class="d-flex align-items-center gap-2">
+            <button class="btn btn-outline-dark" data-bs-toggle="modal" data-bs-target="#exportHoursModal">
+                ⬇️ Витягнути години
+            </button>
         </div>
     }
 </div>
@@ -127,7 +137,7 @@
     }
 </div>
 
-@if (Model.BulkMode && isAdmin)
+@if (Model.BulkMode && canManageSchedule)
 {
     @* ЕДИНАЯ ФОРМА для масового применения *@
     <form id="bulkForm" method="post" class="mb-3">
@@ -280,8 +290,7 @@ else
                 || (lesson.SecondTeacherId.HasValue && lesson.SecondTeacherId.Value.ToString() == userId);
                 bool isTodayLesson = lesson.StartTime.Date == DateTime.Today;
 
-                bool canEditAsTeacher =
-                isTeacher && ((Model.CurrentTeacher?.IsAdmin ?? false) || (isOwner && isTodayLesson));
+                bool canEditAsTeacher =isTeacher && isOwner && isTodayLesson || isAdminTeacher;
 
                 <tr>
                     <td>@GetPairNumber(lesson.StartTime)</td>
@@ -344,15 +353,15 @@ else
                             </button>
                         }
                         else if (isAdmin)
-                        {
-                            <button class="btn btn-sm btn-outline-warning"
-                                    data-bs-toggle="modal"
-                                    data-bs-target="#changeTeacherModal"
-                                    data-lesson-id="@lesson.Id"
-                                    data-lesson-teacher="@lesson.TeacherId">
-                                🔄 Заміна викладача
-                            </button>
-                        }
+                                {
+                                    <button class="btn btn-sm btn-outline-warning"
+                                            data-bs-toggle="modal"
+                                            data-bs-target="#changeTeacherModal"
+                                            data-lesson-id="@lesson.Id"
+                                            data-lesson-teacher="@lesson.TeacherId">
+                                        🔄 Заміна викладача
+                                    </button>
+                                }
                     </td>
                 </tr>
             }
@@ -360,7 +369,7 @@ else
     </table>
 }
 
-@if (isAdmin)
+@if (canManageSchedule)
 {
     <button class="btn btn-outline-primary mt-3" data-bs-toggle="modal" data-bs-target="#importLessonModal">📥 Імпортувати розклад з Excel</button>
 }
@@ -392,7 +401,7 @@ else
                                value="@selectedDateTime.ToString("yyyy-MM-ddTHH:mm")" />
                     </div>
 
-                    @if (isAdmin)
+                    @if (canManageSchedule)
                     {
                         <div class="mb-3">
                             <label class="form-label">Назва предмету</label>
@@ -572,6 +581,13 @@ else
                     <div class="mb-3">
                         <label class="form-label">Кількість годин</label>
                         <input name="InputLesson.Clocks" type="number" class="form-control" min="0" step="1" placeholder="Напр., 2" />
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Номер заняття</label>
+                        <input name="InputLesson.Number"
+                               type="number"
+                               class="form-control"
+                               min="1" />
                     </div>
                 </div>
                 <div class="modal-footer">
@@ -778,7 +794,7 @@ else
             });
         });
         (function(){
-            const isBulk = @((Model.BulkMode && isAdmin) ? "true" : "false");
+            const isBulk = @((Model.BulkMode && canManageSchedule) ? "true" : "false");
             if (!isBulk) return;
 
             const bulkPanel = document.getElementById('bulkPanel');

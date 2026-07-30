@@ -52,8 +52,10 @@ public class IndividualPlanController : ControllerBase
             dto);
 
         if (!result.Success)
+        {
+            Console.WriteLine(result.Message);
             return BadRequest(result.Message);
-
+        }
         return File(
             result.Data!.Content,
             result.Data.ContentType,

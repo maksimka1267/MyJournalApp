@@ -135,7 +135,14 @@ public class GroupController : ControllerBase
 
         return Ok(result.Message);
     }
+    [Authorize]
+    [HttpGet("{groupId}/students")]
+    public async Task<IActionResult> GetStudents(Guid groupId)
+    {
+        var students = await _groupService.GetStudentsByGroupAsync(groupId);
 
+        return Ok(students);
+    }
     [Authorize]
     [HttpPost("bulk-import")]
     public async Task<IActionResult> BulkImportGroups([FromForm] BulkGroupImportDto dto)

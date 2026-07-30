@@ -317,27 +317,5 @@ namespace MyJournalApp.Service
 
             return teachers.ToDictionary(x => x.Id);
         }
-        private List<IGrouping<(Guid GroupId, string Subject, Guid TeacherId), Lesson>> GroupLessons(List<Lesson> lessons)
-        {
-            return lessons
-                .GroupBy(x => (x.GroupId, x.Name, x.TeacherId))
-                .ToList();
-        }
-        private LessonExportDto BuildResult(
-    XLWorkbook workbook,
-    int year,
-    int semester)
-        {
-            using var stream = new MemoryStream();
-
-            workbook.SaveAs(stream);
-
-            return new LessonExportDto
-            {
-                Content = stream.ToArray(),
-                ContentType = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                FileName = $"Hours_Semester_{semester}_{year}.xlsx"
-            };
-        }
     }
 }

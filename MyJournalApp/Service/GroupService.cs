@@ -39,6 +39,19 @@ public class GroupService : IGroupService
 
         return await _groupRepository.GetByIdAsync(student.GroupId);
     }
+    public async Task<List<User>> GetStudentsByGroupAsync(Guid groupId)
+    {
+        var group = await _groupRepository.GetByIdAsync(groupId);
+
+        if (group == null || group.StudentIds == null || !group.StudentIds.Any())
+            return new List<User>();
+
+        var students = await _userRepository.GetByIdsAsync(group.StudentIds);
+
+        return students
+            .OrderBy(x => x.FullName)
+            .ToList();
+    }
     public async Task<IEnumerable<User>> GetUsersByGroupAsync(Guid groupId)
     {
         var students = await _studentRepository.GetByGroupIdAsync(groupId);

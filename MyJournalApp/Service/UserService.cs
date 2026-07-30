@@ -35,7 +35,20 @@ public class UserService : IUserService
 
         return true;
     }
+    public async Task<bool> UpdateTeacherDirectorAsync(UpdateTeacherDirectorDto dto)
+    {
+        var teacher = await _teacherRepository.GetByIdAsync(dto.TeacherId);
 
+        if (teacher == null)
+            return false;
+
+        teacher.IsDirector = dto.IsDirector;
+
+        await _teacherRepository.Update(teacher);
+        await _teacherRepository.SaveChangesAsync();
+
+        return true;
+    }
     public async Task<IEnumerable<Teacher>> GetTeachersAdminStatusAsync()
     {
         return await _teacherRepository.GetAllTeachersWithAdminAsync();

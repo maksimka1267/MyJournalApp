@@ -88,7 +88,7 @@ public class IndexModel : PageModel
 
     [BindProperty] public LessonFormDto InputLesson { get; set; } = new();
     [BindProperty] public ExportFormDto ExportFilters { get; set; } = new();
-
+    public List<string> TeacherSubjects { get; set; } = new();
     public async Task<IActionResult> OnGetAsync()
     {
         var token = Request.Cookies["cookies"];
@@ -97,11 +97,48 @@ public class IndexModel : PageModel
         var user = _contextAccessor.HttpContext?.User;
         var userId = user?.FindFirst(ClaimTypes.NameIdentifier)?.Value;
         Role = user?.FindFirst(ClaimTypes.Role)?.Value ?? "";
+        bool isDirector = false;
+        bool isAdmin = false;
+        Guid? currentTeacherId = null;
 
+        if (Guid.TryParse(userId, out var id))
+        {
+            currentTeacherId = id;
+        }
+        if (Role == "Teacher" && currentTeacherId.HasValue)
+        {
+            var teacherId = currentTeacherId.Value;
+            var teacherClient = _httpClientFactory.CreateClient();
+            teacherClient.DefaultRequestHeaders.Authorization =
+                new AuthenticationHeaderValue("Bearer", token);
+
+            var teacherResponse = await teacherClient.GetAsync(ApiUrl($"/api/User/teacher-model/{teacherId}"));
+
+            if (teacherResponse.IsSuccessStatusCode)
+            {
+                var json = await teacherResponse.Content.ReadAsStringAsync();
+                CurrentTeacher = JsonSerializer.Deserialize<Teacher>(
+                    json,
+                    new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+
+                isDirector = CurrentTeacher?.IsDirector == true;
+            }
+            var teacherAdminResponse = await teacherClient.GetAsync(ApiUrl($"/api/User/teacher-model/{teacherId}"));
+
+            if (teacherAdminResponse.IsSuccessStatusCode)
+            {
+                var json = await teacherResponse.Content.ReadAsStringAsync();
+                CurrentTeacher = JsonSerializer.Deserialize<Teacher>(
+                    json,
+                    new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+
+                isAdmin = CurrentTeacher?.IsAdmin == true;
+            }
+        }
         var client = _httpClientFactory.CreateClient();
         client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
 
-        if (Role == "Admin")
+        if (Role == "Admin" || isDirector)
         {
             var groupResponse = await client.GetAsync(ApiUrl("/api/Group/all"));
             if (groupResponse.IsSuccessStatusCode)
@@ -150,8 +187,7 @@ public class IndexModel : PageModel
                 DayLessons = JsonSerializer.Deserialize<List<Lesson>>(json, new JsonSerializerOptions { PropertyNameCaseInsensitive = true }) ?? new();
             }
         }
-        else if (Role == "Teacher")
-        {
+        else if (Role == "Teacher" && !isDirector) { 
             var groupResponse = await client.GetAsync(ApiUrl("/api/Group/all"));
             if (groupResponse.IsSuccessStatusCode)
             {
@@ -159,8 +195,9 @@ public class IndexModel : PageModel
                 AllGroups = JsonSerializer.Deserialize<List<Group>>(json, new JsonSerializerOptions { PropertyNameCaseInsensitive = true }) ?? new();
             }
 
-            if (Guid.TryParse(userId, out var teacherId))
+            if (currentTeacherId.HasValue)
             {
+                var teacherId = currentTeacherId.Value;
                 var response = await client.GetAsync(ApiUrl("/api/Lesson"));
                 if (response.IsSuccessStatusCode)
                 {
@@ -172,6 +209,14 @@ public class IndexModel : PageModel
                             (l.TeacherId == teacherId || (l.SecondTeacherId.HasValue && l.SecondTeacherId.Value == teacherId))
                         )
                         .ToList();
+                    GroupSubjects = allLessons
+                    .Where(l =>
+                        l.TeacherId == teacherId ||
+                        (l.SecondTeacherId.HasValue && l.SecondTeacherId == teacherId))
+                    .Select(l => l.Name)
+                    .Distinct()
+                    .OrderBy(x => x)
+                    .ToList();
                 }
 
                 var teacherResponse = await client.GetAsync(ApiUrl($"/api/User/teacher-model/{teacherId}"));
@@ -543,6 +588,7 @@ public class IndexModel : PageModel
         lesson.Topic = InputLesson.Topic;
         lesson.Homework = InputLesson.Homework;
         lesson.Clocks = InputLesson.Clocks;
+        lesson.Number = InputLesson.Number;
 
         var updatedJson = JsonSerializer.Serialize(lesson);
         var content = new StringContent(updatedJson, Encoding.UTF8, "application/json");
@@ -617,7 +663,6 @@ public class IndexModel : PageModel
         public DateTime? EndDate { get; set; }       // дата завершення серії (тільки дата)
         public int ForNumerator { get; set; } = 0;
         public int ForDenominator { get; set; } = 0;
-
-
+        public int? Number { get; set; }
     }
 }

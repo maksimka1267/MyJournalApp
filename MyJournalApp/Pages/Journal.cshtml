@@ -146,15 +146,47 @@
     </form>
 }
 
-
+@if(Model.Role == "Teacher")
+{
+    <button type="button"
+            class="btn btn-outline-success"
+            data-bs-toggle="modal"
+            data-bs-target="#downloadStudentPlanModal">
+        👨‍🎓 Індивідуальний план студента
+    </button>
+}
 @if (Model.Role == "Teacher" || Model.Role == "Admin")
 {
     <div class="d-flex align-items-start gap-2 mb-4">
+        <form method="get" class="mb-2">
+            <input type="hidden" name="selectedJournalId" value="@Model.SelectedJournalId" />
+
+            <select class="form-select"
+                    name="SelectedSemester"
+                    onchange="this.form.submit()">
+                @if (Model.SelectedSemester == 1)
+                {
+                    <option value="1" selected>1 семестр</option>
+                    <option value="2">2 семестр</option>
+                }
+                else
+                {
+                    <option value="1">1 семестр</option>
+                    <option value="2" selected>2 семестр</option>
+                }
+            </select>
+        </form>
+
         <form method="get" class="flex-grow-1">
+            <input type="hidden" name="SelectedSemester" value="@Model.SelectedSemester" />
+
             <div class="input-group">
-                <select name="selectedJournalId" class="form-select" onchange="this.form.submit()">
+                <select name="selectedJournalId"
+                        class="form-select"
+                        onchange="this.form.submit()">
+
                     @foreach (var j in Model.Journals
-                                    .OrderBy(j => j.Name ?? j.Name ?? "")
+                                    .OrderBy(j => j.Name ?? "")
                                     .ThenBy(j => Model.GroupNames.GetValueOrDefault(j.GroupId, ""))
                                     .ThenBy(j => j.Date))
                     {
@@ -164,7 +196,7 @@
                         ? j.Name
                         : $"{subject} — {group} ({j.Date:yyyy-MM-dd})";
 
-                        <option value="@j.Id" @(j.Id == Model.SelectedJournalId ? "selected" : "")>
+                        <option value="@j.Id" @(j.Id == Model.SelectedJournalId ? "selected" : null)>
                             @text
                         </option>
                     }
@@ -182,6 +214,14 @@
                 ⬇️ Скачати журнал
             </button>
         </form>
+        @if (Model.Role == "Teacher" && Model.CurrentTeacher?.IsDirector == true)
+        {
+            <button class="btn btn-outline-primary"
+                    data-bs-toggle="modal"
+                    data-bs-target="#directorJournalModal">
+                👁 Переглянути чужий журнал
+            </button>
+        }
         @* Кнопка «Додати колонку» сверху *@
         @if ((Model.Role == "Teacher") && selectedJournal != null && !Model.IsCuratorOnlyForSelectedJournal)
         {
@@ -357,7 +397,7 @@
                     <input type="hidden" name="handler" value="UpdateGrades" />
                     <input type="hidden" name="GradesForUpdate.JournalId" value="@Model.SelectedJournalId" />
 
-                    @if (Model.Role == "Teacher" && !Model.IsCuratorOnlyForSelectedJournal)
+                    @if (Model.CanEditSelectedJournal)
                     {
                         <div class="d-flex justify-content-end mb-2">
                             <button type="submit" class="btn btn-success">💾 Зберегти всі зміни</button>
@@ -388,11 +428,11 @@
                                                        name="NewColumn.Date"
                                                        form="createColForm"
                                                        value="@DateTime.Today.ToString("yyyy-MM-dd")"
-                                                       @(Model.Role == "Teacher" && Model.IsCuratorOnlyForSelectedJournal ? "disabled" : "") />
+                                                       @(!Model.CanEditSelectedJournal ? "disabled" : "") />
                                                 <select class="form-select form-select-sm"
                                                         name="NewColumn.Topic"
                                                         form="createColForm"
-                                                        @(Model.Role == "Teacher" && Model.IsCuratorOnlyForSelectedJournal ? "disabled" : "")>
+                                                        @(!Model.CanEditSelectedJournal ? "disabled" : "")>
                                                     <option value="">— Тема —</option>
                                                     <option value="Лекція">Лекція</option>
                                                     <option value="Практична робота">Практична робота</option>
@@ -401,11 +441,12 @@
                                                     <option value="Зошит/Конспект">Зошит/Конспект</option>
                                                     <option value="Семінарське заняття">Семінарське заняття</option>
                                                     <option value="Робота на уроці">Робота на уроці</option>
+                                                    <option value="Скориговано">Скориговано</option>
                                                 </select>
                                                 <button type="submit"
                                                         class="btn btn-sm btn-outline-primary"
                                                         form="createColForm"
-                                                        @(Model.Role == "Teacher" && Model.IsCuratorOnlyForSelectedJournal ? "disabled" : "")>
+                                                        @(!Model.CanEditSelectedJournal ? "disabled" : "")>
                                                     Створити
                                                 </button>
                                             </div>
@@ -427,7 +468,7 @@
                                                     </div>
 
                                                     @* Кнопка удаления — НЕ form, чтобы не вкладывать формы *@
-                                                    @if ((Model.Role == "Admin") || (Model.Role == "Teacher" && !Model.IsCuratorOnlyForSelectedJournal))
+                                                    @if ((Model.Role == "Admin") || (Model.CanEditSelectedJournal))
                                                     {
                                                         <button type="button"
                                                                 class="btn btn-sm btn-outline-danger btn-delete-col"
@@ -513,7 +554,7 @@
                             </table>
                         </div>
                     </div>
-                    @if (Model.Role == "Teacher" && !Model.IsCuratorOnlyForSelectedJournal)
+                    @if (Model.CanEditSelectedJournal)
                     {
                         <div class="mt-3 d-flex justify-content-end">
                             <button type="submit" class="btn btn-success">💾 Зберегти всі зміни</button>
@@ -553,6 +594,30 @@ else
                         <div class="form-text">
                             Напр.: «Вища математика - КБ-21 (1 семестр 2025/2026)»
                         </div>
+                        <div class="form-check mb-3">
+                            <input class="form-check-input"
+                                   type="checkbox"
+                                   id="addTeacherCheckbox" />
+
+                            <label class="form-check-label" for="addTeacherCheckbox">
+                                Додати викладача
+                            </label>
+                        </div>
+                        <div class="mb-3 d-none" id="teacherSelectBlock">
+                            <label class="form-label">Викладач</label>
+
+                            <select class="form-select"
+                                    name="EditJournal.NewTeacherId">
+                                <option value="">Оберіть викладача</option>
+
+                                @foreach (var teacher in Model.Users.Where(x => x.Role == "Teacher"))
+                                {
+                                    <option value="@teacher.Id">
+                                        @teacher.FullName
+                                    </option>
+                                }
+                            </select>
+                        </div>
                     </div>
                 </div>
 
@@ -564,7 +629,120 @@ else
         </div>
     </div>
 </div>
+<div class="modal fade" id="downloadStudentPlanModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content border-0 rounded-4 shadow-lg">
+            <form method="post">
+                @Html.AntiForgeryToken()
+                <input type="hidden" name="handler" value="DownloadStudentPlan" />
 
+                <div class="modal-header border-0 pb-0">
+                    <h5 class="modal-title fw-semibold">
+                        Індивідуальний план студента
+                    </h5>
+                    <button type="button"
+                            class="btn-close"
+                            data-bs-dismiss="modal">
+                    </button>
+                </div>
+
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label class="form-label">Студент</label>
+                        <select name="StudentId" class="form-select" required>
+                            <option value="">Оберіть студента</option>
+                            @foreach (var student in Model.CuratedStudents)
+                            {
+                                <option value="@student.Id">
+                                    @student.FullName
+                                </option>
+                            }
+                        </select>
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label">Семестр</label>
+                        <select name="Semester" class="form-select" required>
+                            <option value="1">I (осінній)</option>
+                            <option value="2">II (весняний)</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="modal-footer border-0 pt-0">
+                    <button type="submit" class="btn btn-success w-100 py-2">
+                        📒 Завантажити план
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+<div class="modal fade" id="directorJournalModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+
+            <form method="post">
+                @Html.AntiForgeryToken()
+                <input type="hidden" name="handler" value="DirectorDownloadJournal" />
+
+                <div class="modal-header">
+                    <h5 class="modal-title">Перегляд журналу викладача</h5>
+                    <button type="button"
+                            class="btn-close"
+                            data-bs-dismiss="modal">
+                    </button>
+                </div>
+
+                <div class="modal-body">
+
+                    <div class="mb-3">
+                        <label class="form-label">Викладач</label>
+
+                        <select id="directorTeacherSelect"
+                                class="form-select">
+                            <option value="">Оберіть викладача</option>
+
+                            @foreach (var teacher in Model.Users.Where(x => x.Role == "Teacher"))
+                            {
+                                <option value="@teacher.Id">
+                                    @teacher.FullName
+                                </option>
+                            }
+                        </select>
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label">Журнал</label>
+
+                        <select id="directorJournalSelect"
+                                name="DirectorJournalId"
+                                class="form-select"
+                                required>
+                            <option value="">Спочатку оберіть викладача</option>
+                        </select>
+                    </div>
+
+                </div>
+
+                <div class="modal-footer">
+                    <button type="button"
+                            class="btn btn-secondary"
+                            data-bs-dismiss="modal">
+                        Скасувати
+                    </button>
+
+                    <button type="submit"
+                            class="btn btn-primary">
+                        Завантажити
+                    </button>
+                </div>
+
+            </form>
+
+        </div>
+    </div>
+</div>
 <!-- Модалка створення журналу -->
 <div class="modal fade" id="addJournalModal" tabindex="-1" aria-labelledby="addJournalModalLabel" aria-hidden="true">
     <div class="modal-dialog">
@@ -823,7 +1001,7 @@ else
                 </div>
                 <div class="modal-footer">
                     <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Скасувати</button>
-                    @if (Model.Role == "Teacher" && !Model.IsCuratorOnlyForSelectedJournal)
+                    @if (Model.CanEditSelectedJournal)
                     {
                         <button type="submit" class="btn btn-primary">Зберегти колонку</button>
                     }
@@ -1079,4 +1257,80 @@ else
         onlyOneGroup.addEventListener("change", toggleGroupBlock);
     }
     });
+        document.addEventListener("DOMContentLoaded", () => {
+
+        const checkbox = document.getElementById("addTeacherCheckbox");
+        const block = document.getElementById("teacherSelectBlock");
+
+        checkbox.addEventListener("change", () => {
+            block.classList.toggle("d-none", !checkbox.checked);
+        });
+
+    });
+        const teacherSelect = document.getElementById("directorTeacherSelect");
+    const journalSelect = document.getElementById("directorJournalSelect");
+
+    if (teacherSelect && journalSelect) {
+
+        teacherSelect.addEventListener("change", async function () {
+
+            journalSelect.innerHTML =
+                '<option value="">Завантаження...</option>';
+
+            const teacherId = this.value;
+
+            if (!teacherId) {
+                journalSelect.innerHTML =
+                    '<option value="">Спочатку оберіть викладача</option>';
+                return;
+            }
+
+                try {
+
+    const response = await fetch(`/api/Journal/director/${teacherId}`);
+
+        console.log("Status:", response.status);
+
+        if (!response.ok) {
+            const error = await response.text();
+            console.error("API Error:", error);
+            throw new Error(error);
+        }
+
+        const journals = await response.json();
+
+        console.log("Journals:", journals);
+
+        journalSelect.innerHTML = "";
+
+        if (journals.length === 0) {
+            journalSelect.innerHTML =
+                '<option value="">Журнали відсутні</option>';
+            return;
+        }
+
+        journals.forEach(journal => {
+
+            const option = document.createElement("option");
+
+            option.value = journal.id;
+            option.textContent = journal.name;
+
+            journalSelect.appendChild(option);
+
+        });
+
+    }
+    catch (e) {
+
+        console.error("Fetch failed:", e);
+
+        journalSelect.innerHTML =
+            '<option value="">Помилка завантаження</option>';
+
+    }
+
+        });
+
+    }
 </script>

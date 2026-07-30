@@ -12,4 +12,5 @@ public class Lesson
     public string? Homework { get; set; }             // Домашнее задание
     public DateTime StartTime { get; set; }           // Время начала (дата + время)
     public int? Clocks { get; set; }
+    public int? Number { get; set; }
 }

@@ -14,7 +14,7 @@ namespace MyJournalApp.Service.Interface
         Task<ServiceResult<JournalEntry>> CreateAsync(JournalEntry journal);
 
         Task<ServiceResult<JournalEntry>> UpdateAsync(Guid id, JournalEntry journal);
-
+        Task<bool> IsDirectorAsync(Guid teacherId);
         Task<IServiceResult> DeleteAsync(Guid id);
     }
 }

@@ -6,6 +6,7 @@ namespace MyJournalApp.Service.Interface;
 public interface IUserService
 {
     Task<bool> UpdateTeacherAdminAsync(UpdateTeacherAdminDto dto);
+    Task<bool> UpdateTeacherDirectorAsync(UpdateTeacherDirectorDto dto);
 
     Task<IEnumerable<Teacher>> GetTeachersAdminStatusAsync();
 

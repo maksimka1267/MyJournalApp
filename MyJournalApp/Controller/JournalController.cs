@@ -25,7 +25,22 @@ public class JournalController : ControllerBase
         var journals = await _journalService.GetAllAsync();
         return Ok(journals);
     }
+    [Authorize(Roles = "Teacher")]
+    [HttpGet("director/{teacherId:guid}")]
+    public async Task<IActionResult> GetTeacherJournalsForDirector(Guid teacherId)
+    {
+        var currentTeacherId = Guid.Parse(
+            User.FindFirstValue(ClaimTypes.NameIdentifier)!);
 
+        var isDirector = await _journalService.IsDirectorAsync(currentTeacherId);
+
+        if (!isDirector)
+            return Forbid();
+
+        var journals = await _journalService.GetTeacherJournalsAsync(teacherId);
+
+        return Ok(journals);
+    }
     [Authorize]
     [HttpGet("my")]
     public async Task<IActionResult> GetMy()

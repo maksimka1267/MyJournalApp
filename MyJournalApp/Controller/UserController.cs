@@ -26,7 +26,16 @@ public class UserController : ControllerBase
             ? Ok("Teacher admin status updated")
             : NotFound("Teacher not found");
     }
+    [HttpPut("update-teacher-director")]
+    public async Task<IActionResult> UpdateTeacherDirector(
+    [FromBody] UpdateTeacherDirectorDto dto)
+    {
+        var result = await _userService.UpdateTeacherDirectorAsync(dto);
 
+        return result
+            ? Ok("Teacher director status updated")
+            : NotFound("Teacher not found");
+    }
     [Authorize]
     [HttpGet("teachers-admin-status")]
     public async Task<IActionResult> GetTeachersAdminStatus()

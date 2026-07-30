@@ -19,7 +19,6 @@ public class JournalColumn
 
     // Ключ (стабильный) для различения колонок с одинаковой датой
     public string TopicKey => MakeTopicKey(Topic);
-
     public static string MakeTopicKey(string? topic)
         => string.IsNullOrWhiteSpace(topic)
             ? "no-topic"
@@ -40,10 +39,16 @@ public class JournalModel : PageModel
     {
         public Guid Id { get; set; }
         public string Name { get; set; } = "";
+        public bool AddTeacher { get; set; }
+        public Guid? NewTeacherId { get; set; }
+
     }
     // ✅ Діапазон для Student (передається в query): /Journal?from=2026-02-01&to=2026-02-10
     [BindProperty(SupportsGet = true)]
     public DateOnly? From { get; set; }
+    [BindProperty(SupportsGet = true)]
+    public int SelectedSemester { get; set; } =
+    DateTime.Now.Month >= 9 ? 1 : 2;
 
     [BindProperty(SupportsGet = true)]
     public DateOnly? To { get; set; }
@@ -51,7 +56,7 @@ public class JournalModel : PageModel
     // ✅ Фактичний діапазон (для UI)
     public DateOnly StudentFrom { get; set; }
     public DateOnly StudentTo { get; set; }
-
+    public List<User> CuratedStudents { get; set; } = new();
     [BindProperty] public EditJournalModel EditJournal { get; set; } = new();
 
     public class ExportGradesRequest
@@ -68,8 +73,18 @@ public class JournalModel : PageModel
     public List<Grade> Grades { get; set; } = new();
     public List<Student> Students { get; set; } = new();
     public List<Teacher> Teachers { get; set; } = new();
+    [BindProperty]
+    public Guid DirectorTeacherId { get; set; }
+    [BindProperty]
+    public Guid DirectorJournalId { get; set; }
+    public List<JournalEntry> DirectorJournals { get; set; } = new();
+    [BindProperty]
+    public DateTime DirectorStartDate { get; set; } = DateTime.Today.AddMonths(-1);
+    [BindProperty]
+    public DateTime DirectorEndDate { get; set; } = DateTime.Today;
+    public Teacher? CurrentTeacher { get; set; }
     public List<User> Users { get; set; } = new();
-
+    public List<User> DirectorTeachers { get; set; } = new();
     public Dictionary<Guid, string> StudentNames { get; set; } = new();
     public Dictionary<Guid, string> TeacherNames { get; set; } = new();
     public List<JournalColumn> JournalColumns { get; set; } = new();
@@ -79,7 +94,7 @@ public class JournalModel : PageModel
     [BindProperty] public Guid SelectedJournalId { get; set; }
     [BindProperty] public string SelectedTeacher { get; set; } = "";
     public HashSet<Guid> CuratedGroupIds { get; set; } = new();
-
+    public bool CanEditSelectedJournal { get; set; }
     public bool IsCuratorOnlyForSelectedJournal =>
         Role == "Teacher"
         && SelectedJournal != null
@@ -147,30 +162,76 @@ public class JournalModel : PageModel
                     break;
                 }
 
-            case "Teacher": await LoadTeacherBaseData(); break;
+            case "Teacher":
+                await LoadTeacherBaseData();
+
+                CurrentTeacher = await _httpClient.GetFromJsonAsync<Teacher>(ApiUrl($"/api/User/teacher-model/{UserId}"));
+
+                if (CurrentTeacher?.IsDirector == true)
+                {
+                    await LoadAdminBaseData();
+
+                    DirectorTeachers = Users
+                        .Where(x => x.Role == "Teacher")
+                        .OrderBy(x => x.FullName)
+                        .ToList();
+                }
+                else
+                {
+                    await LoadTeacherBaseData();
+                }
+
+                break;
             case "Admin": await LoadAdminBaseData(); break;
         }
+        // Фільтрація журналів за вибраним семестром
+        if (Role == "Teacher" || Role == "Admin")
+        {
+            Journals = Journals
+    .Where(j =>
+        (SelectedSemester == 1 &&
+         j.Name?.Contains("(1 семестр") == true)
 
+        ||
+
+        (SelectedSemester == 2 &&
+         j.Name?.Contains("(2 семестр") == true))
+    .ToList();
+        }
         // выбрать журнал
-        if (selectedJournalId.HasValue && Journals.Any(j => j.Id == selectedJournalId.Value))
+        if (selectedJournalId.HasValue &&
+            Journals.Any(j => j.Id == selectedJournalId.Value))
+        {
             SelectedJournalId = selectedJournalId.Value;
+        }
         else if (Journals.Any())
-            SelectedJournalId = Journals.OrderByDescending(j => j.Date).First().Id;
+        {
+            SelectedJournalId = Journals
+                .OrderByDescending(j => j.Date)
+                .First()
+                .Id;
+        }
 
-        // детали выбранного журнала
+        // <<< ВСТАВИТЬ СЮДА >>>
+
+        CanEditSelectedJournal =
+    Role == "Admin"
+    || (Journals
+            .FirstOrDefault(j => j.Id == SelectedJournalId)?
+            .TeacherId?
+            .Contains(UserId) ?? false);
+
         // детали выбранного журнала
         if (SelectedJournalId != Guid.Empty)
         {
             var j = Journals.First(x => x.Id == SelectedJournalId);
 
-            // ВАЖНО: для студента не перезатираем его полный список оценок
             if (Role != "Student")
             {
                 await LoadStudentsAndGradesForJournal(j.GroupId);
                 BuildJournalColumns();
             }
         }
-
 
         return Page();
     }
@@ -229,8 +290,100 @@ public class JournalModel : PageModel
             "DownloadJournalExcel" => await OnPostDownloadJournalExcelAsync(),
             "DownloadSemesterZip" => await OnPostDownloadSemesterZipAsync(),
             "UpdateJournalName" => await OnPostUpdateJournalNameAsync(),
+            "DirectorDownloadJournal" => await OnPostDirectorDownloadJournalAsync(),
+            "DownloadStudentPlan" => await OnPostDownloadStudentPlanAsync(),
             _ => await OnGetAsync(SelectedJournalId)
         };
+    }
+    private async Task<IActionResult> OnPostDownloadStudentPlanAsync()
+    {
+        ModelState.Remove(nameof(SelectedTeacher));
+
+        var token = Request.Cookies["cookies"];
+        if (string.IsNullOrEmpty(token))
+            return RedirectToPage("/Account/Login");
+
+        _httpClient.DefaultRequestHeaders.Authorization =
+            new AuthenticationHeaderValue("Bearer", token);
+
+        // Студент
+        var studentStr = Request.Form["StudentId"].ToString();
+        if (!Guid.TryParse(studentStr, out var studentId))
+        {
+            FlashMessage = "Не обрано студента.";
+            return await OnGetAsync(SelectedJournalId);
+        }
+
+        // Семестр
+        var semester = 1;
+        int.TryParse(Request.Form["Semester"], out semester);
+
+        if (semester != 1 && semester != 2)
+            semester = 1;
+
+        // Запит до API
+        var response = await _httpClient.GetAsync(
+            ApiUrl($"/api/IndividualPlan/student/{studentId}?sem={semester}"));
+
+        if (!response.IsSuccessStatusCode)
+        {
+            FlashMessage = "Не вдалося сформувати індивідуальний план.";
+            return await OnGetAsync(SelectedJournalId);
+        }
+
+        var bytes = await response.Content.ReadAsByteArrayAsync();
+
+        var fileName =
+            response.Content.Headers.ContentDisposition?.FileNameStar ??
+            response.Content.Headers.ContentDisposition?.FileName ??
+            "Індивідуальний_план.xlsx";
+
+        return File(
+            bytes,
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            fileName);
+    }
+    public async Task<IActionResult> OnPostDirectorDownloadJournalAsync()
+    {
+        ModelState.Remove(nameof(SelectedTeacher));
+
+        var token = Request.Cookies["cookies"];
+        if (string.IsNullOrEmpty(token))
+            return RedirectToPage("/Account/Login");
+
+        _httpClient.DefaultRequestHeaders.Authorization =
+            new AuthenticationHeaderValue("Bearer", token);
+
+        if (DirectorJournalId == Guid.Empty)
+        {
+            FlashMessage = "Журнал не обрано.";
+            return await OnGetAsync();
+        }
+
+        // Пока используем существующий endpoint.
+        // Позже заменим на director/export.
+        var url = ApiUrl($"/api/JournalExport/{DirectorJournalId}");
+
+        var response = await _httpClient.GetAsync(url);
+
+        if (!response.IsSuccessStatusCode)
+        {
+            FlashMessage = "Не вдалося сформувати файл журналу.";
+            return await OnGetAsync();
+        }
+
+        var bytes = await response.Content.ReadAsByteArrayAsync();
+
+        var fileName =
+            response.Content.Headers.ContentDisposition?.FileNameStar ??
+            response.Content.Headers.ContentDisposition?.FileName ??
+            "journal.xlsx";
+
+        var contentType =
+            response.Content.Headers.ContentType?.ToString() ??
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+
+        return File(bytes, contentType, fileName.Trim('"'));
     }
     public async Task<IActionResult> OnPostUpdateJournalNameAsync()
     {
@@ -266,7 +419,11 @@ public class JournalModel : PageModel
         }
 
         journal.Name = EditJournal.Name.Trim();
-
+        if (EditJournal.NewTeacherId.HasValue &&
+            !journal.TeacherId.Contains(EditJournal.NewTeacherId.Value))
+        {
+            journal.TeacherId.Add(EditJournal.NewTeacherId.Value);
+        }
         var putResp = await _httpClient.PutAsJsonAsync(ApiUrl($"/api/Journal/{EditJournal.Id}"), journal);
 
         if (!putResp.IsSuccessStatusCode)
@@ -1185,6 +1342,21 @@ public class JournalModel : PageModel
 
         foreach (var id in groupIds)
             GroupNames[id] = allGroups.FirstOrDefault(g => g.Id == id)?.Name ?? "Невідомо";
+        CuratedStudents.Clear();
+
+        foreach (var group in curatedGroups)
+        {
+            var students = await _httpClient.GetFromJsonAsync<List<User>>(
+                ApiUrl($"/api/Group/{group.Id}/students"))
+                ?? new List<User>();
+
+            CuratedStudents.AddRange(students);
+        }
+
+        CuratedStudents = CuratedStudents
+            .DistinctBy(x => x.Id)
+            .OrderBy(x => x.FullName)
+            .ToList();
     }
 
     private async Task LoadAdminBaseData()

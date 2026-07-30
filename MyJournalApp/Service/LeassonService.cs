@@ -111,6 +111,9 @@ namespace MyJournalApp.Service
             if (updated.Clocks.HasValue)
                 existing.Clocks = updated.Clocks;
 
+            if (updated.Number.HasValue)
+                existing.Number = updated.Number;
+
             if (updated.StartTime != default)
                 existing.StartTime = updated.StartTime;
 

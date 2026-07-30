@@ -7,13 +7,16 @@ namespace MyJournalApp.Service
     {
         private readonly IJournalEntryRepository _journalRepository;
         private readonly IGradeRepository _gradeRepository;
+        private readonly ITeacherRepository _teacherRepository;
 
         public JournalService(
             IJournalEntryRepository journalRepository,
-            IGradeRepository gradeRepository)
+            IGradeRepository gradeRepository,
+            ITeacherRepository teacherRepository)
         {
             _journalRepository = journalRepository;
             _gradeRepository = gradeRepository;
+            _teacherRepository = teacherRepository;
         }
         public async Task<IEnumerable<JournalEntry>> GetAllAsync()
         {
@@ -34,6 +37,12 @@ namespace MyJournalApp.Service
             await _journalRepository.AddAsync(journal);
 
             return ServiceResult<JournalEntry>.Ok(journal);
+        }
+        public async Task<bool> IsDirectorAsync(Guid teacherId)
+        {
+            var teacher = await _teacherRepository.GetByIdAsync(teacherId);
+
+            return teacher?.IsDirector == true;
         }
         public async Task<ServiceResult<JournalEntry>> UpdateAsync(Guid id, JournalEntry journal)
         {

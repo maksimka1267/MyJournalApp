@@ -27,7 +27,7 @@ public class TeacherRepository : Repository<Teacher>, ITeacherRepository
     public async Task<List<Teacher>> GetAllTeachersWithAdminAsync()
     {
         return await _context.Teachers
-            .Where(u => u.IsAdmin == true)
+            .Where(t => t.IsAdmin || t.IsDirector)
             .ToListAsync();
     }
     public async Task<Guid?> GetTeacherIdByFullNameAsync(string shortName)

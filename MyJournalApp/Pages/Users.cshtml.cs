@@ -20,12 +20,14 @@ public class UsersModel : PageModel
     public List<User> Users { get; set; } = new();
     public List<Group> Groups { get; set; } = new();
     public Dictionary<Guid, bool> TeacherAdminStatus { get; set; } = new();
-
+    public Dictionary<Guid, bool> TeacherDirectorStatus { get; set; } = new();
     [BindProperty(SupportsGet = true)] public string SearchTerm { get; set; } = string.Empty;
     [BindProperty(SupportsGet = true)] public string SelectedRole { get; set; } = string.Empty;
 
     [BindProperty] public Guid TeacherId { get; set; }
     [BindProperty] public bool IsAdminFlag { get; set; }
+    [BindProperty]
+    public bool IsDirectorFlag { get; set; }
 
     // Новые модели
     [BindProperty] public CreateUserModel NewUser { get; set; } = new();
@@ -63,8 +65,12 @@ public class UsersModel : PageModel
         Users = usersTask?.Result ?? new();
         Groups = groupsTask?.Result ?? new();
         var teachers = teachersTask?.Result ?? new();
+        TeacherDirectorStatus = teachers.ToDictionary(t => t.Id, t => t.IsDirector);
+        TeacherAdminStatus =
+            teachers.ToDictionary(t => t.Id, t => t.IsAdmin);
 
-        TeacherAdminStatus = teachers.ToDictionary(t => t.Id, t => t.IsAdmin);
+        TeacherDirectorStatus =
+            teachers.ToDictionary(t => t.Id, t => t.IsDirector);
 
         return Page();
     }
@@ -136,12 +142,33 @@ public class UsersModel : PageModel
         }
 
         // 2) Обновление статуса админа у викладача
-        if (TeacherId != Guid.Empty)
+        if (handler == "UpdateTeacherAdmin")
         {
-            var payload = new { TeacherId, IsAdmin = IsAdminFlag };
-            var resp = await client.PutAsJsonAsync(ApiUrl("/api/User/update-teacher-admin"), payload);
-            if (!resp.IsSuccessStatusCode)
-                ModelState.AddModelError(string.Empty, "Не вдалося змінити статус адміністратора.");
+            var payload = new
+            {
+                TeacherId,
+                IsAdmin = IsAdminFlag
+            };
+
+            await client.PutAsJsonAsync(
+                ApiUrl("/api/User/update-teacher-admin"),
+                payload);
+
+            return RedirectToPage();
+        }
+
+
+        if (handler == "UpdateTeacherDirector")
+        {
+            var payload = new
+            {
+                TeacherId,
+                IsDirector = IsDirectorFlag
+            };
+
+            await client.PutAsJsonAsync(
+                ApiUrl("/api/User/update-teacher-director"),
+                payload);
 
             return RedirectToPage();
         }

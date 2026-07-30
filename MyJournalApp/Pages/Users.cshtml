@@ -113,12 +113,26 @@
                                     bool isAdmin = Model.TeacherAdminStatus.TryGetValue(user.Id, out var flag) && flag;
                                     <form method="post" class="d-inline">
                                         @Html.AntiForgeryToken()
+                                        <input type="hidden" name="handler" value="UpdateTeacherAdmin" />
                                         <input type="hidden" name="TeacherId" value="@user.Id" />
                                         <input type="hidden" name="IsAdminFlag" value="@(isAdmin ? "false" : "true")" />
                                         <input type="checkbox" onchange="this.form.submit()" @(isAdmin ? "checked" : "") />
                                     </form>
                                 }
-
+                                @if (user.Role == "Teacher")
+                                {
+                                    bool isDirector =Model.TeacherDirectorStatus.TryGetValue(user.Id, out var directorFlag) && directorFlag;
+                                    <form method="post" class="d-inline">
+                                        @Html.AntiForgeryToken()
+                                        <input type="hidden" name="TeacherId" value="@user.Id" />
+                                        <input type="hidden" name="IsDirectorFlag" value="@(isDirector ? "false" : "true")" />
+                                        <input type="hidden"  name="handler" value="UpdateTeacherDirector" />
+                                        <button type="submit" class="btn btn-sm @(isDirector ? "btn-primary" : "btn-outline-primary")"
+                                                title="@(isDirector ? "Прибрати права директора" : "Надати права директора")">
+                                            @(isDirector ? "🏫 Директор" : "➕ Зробити директором")
+                                        </button>
+                                    </form>
+                                }
                                 <!-- 🔐 Скинути пароль -->
                                 <form method="post" class="d-inline"
                                       onsubmit="return confirm('Скинути пароль для цього користувача? Пароль стане \" test\".');">
