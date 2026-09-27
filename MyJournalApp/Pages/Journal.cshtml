@@ -91,7 +91,22 @@
         }
     </div>
 }
+@if (Model.Role == "Teacher" && Model.CurrentTeacher?.IsDirector == true)
+{
+    <form method="get">
+        <button type="submit"
+        name="ShowAllJournals"
+        value="@(Model.ShowAllJournals ? "false" : "true")"
+        class="btn btn-outline-primary">
 
+            @(
+                Model.ShowAllJournals
+                                    ? "📚 Мої журнали"
+                                    : "📚 Всі журнали"
+                )
+        </button>
+    </form>
+}
 @if (Model.Role == "Admin")
 {
     <div class="d-flex flex-wrap gap-2 mb-3">
@@ -423,13 +438,15 @@
                                         <th class="align-top" style="min-width:220px;">
                                             <div class="fw-semibold mb-1">Створити колонку</div>
                                             <div class="d-flex flex-column gap-1">
-                                                <input type="date"
+                                                <input type="datetime-local"
                                                        class="form-control form-control-sm"
                                                        name="NewColumn.Date"
                                                        form="createColForm"
-                                                       value="@DateTime.Today.ToString("yyyy-MM-dd")"
+                                                       value="@DateTime.Now.ToString("yyyy-MM-ddTHH:mm")"
+                                                       step="60"
                                                        @(!Model.CanEditSelectedJournal ? "disabled" : "") />
                                                 <select class="form-select form-select-sm"
+                                                        id="newColumnTopic"
                                                         name="NewColumn.Topic"
                                                         form="createColForm"
                                                         @(!Model.CanEditSelectedJournal ? "disabled" : "")>
@@ -443,6 +460,17 @@
                                                     <option value="Робота на уроці">Робота на уроці</option>
                                                     <option value="Скориговано">Скориговано</option>
                                                 </select>
+
+                                                <div id="newColumnNumberWrap" style="display:none;">
+                                                    <input type="number"
+                                                           class="form-control form-control-sm"
+                                                           id="newColumnNumber"
+                                                           name="NewColumn.Number"
+                                                           form="createColForm"
+                                                           min="1"
+                                                           placeholder="№ заняття"
+                                                           @(!Model.CanEditSelectedJournal ? "disabled" : "") />
+                                                </div>
                                                 <button type="submit"
                                                         class="btn btn-sm btn-outline-primary"
                                                         form="createColForm"
@@ -462,7 +490,10 @@
                                                 <div class="d-flex justify-content-between align-items-start gap-2">
                                                     <div class="text-start">
                                                         <div class="fw-semibold">
-                                                            @(!string.IsNullOrWhiteSpace(column.Topic) ? column.Topic : "—")
+                                                            @{
+                                                                var displayTopic = DisplayTopic(column.Topic);
+                                                            }
+                                                            @(!string.IsNullOrWhiteSpace(displayTopic) ? displayTopic : "—")
                                                         </div>
                                                         <small class="text-muted d-block">@column.Date.ToString("dd.MM")</small>
                                                     </div>
@@ -974,7 +1005,7 @@ else
                         </div>
                         <div class="col-md-6">
                             <label class="form-label">Дата</label>
-                            <input type="date" name="GradesForUpdate.Date" class="form-control" value="@DateTime.Today.ToString("yyyy-MM-dd")" required />
+                            <input type="date" name="GradesForUpdate.Date" class="form-control" value="@DateTime.Today.ToString("yyyy-MM-ddTHH:mm")" required />
                         </div>
                     </div>
                     <hr />
@@ -1056,7 +1087,6 @@ else
         // разрешено: пусто, 0..regularMax, ИЛИ 30
         // =========================
         function validateGradeInput(inp) {
-            // если readonly — не валидируем
             if (inp.hasAttribute('readonly')) {
                 inp.setCustomValidity('');
                 return true;
@@ -1067,7 +1097,6 @@ else
 
             const raw = (inp.value ?? '').trim();
 
-            // пустое значение допустимо
             if (raw === '') {
                 inp.setCustomValidity('');
                 return true;
@@ -1079,13 +1108,11 @@ else
                 return false;
             }
 
-            // исключение
             if (val === 30) {
                 inp.setCustomValidity('');
                 return true;
             }
 
-            // обычный диапазон
             if (val < 0 || val > regMax) {
                 inp.setCustomValidity(`Допустимо 0–${regMax} або 30`);
                 return false;
@@ -1095,7 +1122,6 @@ else
             return true;
         }
 
-        // Живая валидация при вводе
         document.querySelectorAll('.grade-input').forEach(function (inp) {
             inp.addEventListener('input', function () { validateGradeInput(inp); });
             inp.addEventListener('blur', function () { validateGradeInput(inp); });
@@ -1108,7 +1134,6 @@ else
         document.querySelectorAll('form').forEach(function (form) {
             form.addEventListener('submit', function (e) {
 
-                // 1) Валидация оценок перед отправкой
                 const gradeInputs = form.querySelectorAll('.grade-input');
                 for (const inp of gradeInputs) {
                     if (inp.hasAttribute('readonly')) continue;
@@ -1120,7 +1145,6 @@ else
                     }
                 }
 
-                // 2) Твоя логика выбора name для grade-input
                 form.querySelectorAll('.grade-input').forEach(function (inp) {
                     const initial = (inp.dataset.initial ?? '').trim();
                     const current = (inp.value ?? '').trim();
@@ -1131,7 +1155,6 @@ else
                         return;
                     }
 
-                    // ВСЕГДА шлём 0, даже если он совпадает с initial
                     if (current === '0') {
                         inp.setAttribute('name', n);
                         return;
@@ -1141,11 +1164,9 @@ else
                         if (initial === '') {
                             inp.removeAttribute('name');
                         } else {
-                            // было что-то → стало пусто → шлём, чтобы бек понял "стереть"
                             inp.setAttribute('name', n);
                         }
                     } else {
-                        // другие значения — только если реально изменились
                         if (current === initial) {
                             inp.removeAttribute('name');
                         } else {
@@ -1154,7 +1175,6 @@ else
                     }
                 });
 
-                // 3) Твоя логика выбора name для presence-select
                 form.querySelectorAll('.presence-select').forEach(function (sel) {
                     const initial = (sel.dataset.initial ?? '').trim();
                     const current = (sel.value ?? '').trim();
@@ -1196,26 +1216,21 @@ else
                 form.submit();
             }
         });
+
         const bottom = document.querySelector('.journal-scroll-bottom');
         const top = document.querySelector('.journal-scroll-top');
         const topInner = document.querySelector('.journal-scroll-top-inner');
 
         function syncTopWidth() {
             if (!bottom || !top || !topInner) return;
-
-            // ширина контента таблицы
             const table = bottom.querySelector('table');
             if (!table) return;
-
-            // задаём "виртуальную" ширину верхнему скроллу
             topInner.style.width = table.scrollWidth + 'px';
         }
 
         if (bottom && top) {
-            // первичная установка ширины
             syncTopWidth();
 
-            // синхрон прокрутки
             let lock = false;
 
             top.addEventListener('scroll', () => {
@@ -1232,105 +1247,130 @@ else
                 lock = false;
             });
 
-            // пересчёт при ресайзе
             window.addEventListener('resize', syncTopWidth);
-
-            // если таблица меняет ширину из-за данных
-            // (на всякий случай)
             setTimeout(syncTopWidth, 0);
             setTimeout(syncTopWidth, 100);
         }
-                    const onlyOneGroup = document.getElementById("onlyOneGroup");
-    const groupSelectBlock = document.getElementById("groupSelectBlock");
 
-    if (onlyOneGroup && groupSelectBlock) {
+        const onlyOneGroup = document.getElementById("onlyOneGroup");
+        const groupSelectBlock = document.getElementById("groupSelectBlock");
 
-        function toggleGroupBlock() {
-            groupSelectBlock.style.display =
-                onlyOneGroup.checked ? "block" : "none";
+        if (onlyOneGroup && groupSelectBlock) {
+            function toggleGroupBlock() {
+                groupSelectBlock.style.display = onlyOneGroup.checked ? "block" : "none";
+            }
+            toggleGroupBlock();
+            onlyOneGroup.addEventListener("change", toggleGroupBlock);
         }
-
-        // при открытии страницы
-        toggleGroupBlock();
-
-        // при изменении галочки
-        onlyOneGroup.addEventListener("change", toggleGroupBlock);
-    }
     });
-        document.addEventListener("DOMContentLoaded", () => {
 
+    document.addEventListener("DOMContentLoaded", () => {
         const checkbox = document.getElementById("addTeacherCheckbox");
         const block = document.getElementById("teacherSelectBlock");
 
         checkbox.addEventListener("change", () => {
             block.classList.toggle("d-none", !checkbox.checked);
         });
-
     });
-        const teacherSelect = document.getElementById("directorTeacherSelect");
+
+    const teacherSelect = document.getElementById("directorTeacherSelect");
     const journalSelect = document.getElementById("directorJournalSelect");
 
     if (teacherSelect && journalSelect) {
-
         teacherSelect.addEventListener("change", async function () {
-
-            journalSelect.innerHTML =
-                '<option value="">Завантаження...</option>';
+            journalSelect.innerHTML = '<option value="">Завантаження...</option>';
 
             const teacherId = this.value;
 
             if (!teacherId) {
-                journalSelect.innerHTML =
-                    '<option value="">Спочатку оберіть викладача</option>';
+                journalSelect.innerHTML = '<option value="">Спочатку оберіть викладача</option>';
                 return;
             }
 
-                try {
+            try {
+                const response = await fetch(`/api/Journal/director/${teacherId}`);
 
-    const response = await fetch(`/api/Journal/director/${teacherId}`);
+                console.log("Status:", response.status);
 
-        console.log("Status:", response.status);
+                if (!response.ok) {
+                    const error = await response.text();
+                    console.error("API Error:", error);
+                    throw new Error(error);
+                }
 
-        if (!response.ok) {
-            const error = await response.text();
-            console.error("API Error:", error);
-            throw new Error(error);
+                const journals = await response.json();
+
+                console.log("Journals:", journals);
+
+                journalSelect.innerHTML = "";
+
+                if (journals.length === 0) {
+                    journalSelect.innerHTML = '<option value="">Журнали відсутні</option>';
+                    return;
+                }
+
+                journals.forEach(journal => {
+                    const option = document.createElement("option");
+                    option.value = journal.id;
+                    option.textContent = journal.name;
+                    journalSelect.appendChild(option);
+                });
+            }
+            catch (e) {
+                console.error("Fetch failed:", e);
+                journalSelect.innerHTML = '<option value="">Помилка завантаження</option>';
+            }
+        });
+    }
+
+    document.addEventListener("DOMContentLoaded", () => {
+        const topic = document.getElementById("newColumnTopic");
+        const wrap = document.getElementById("newColumnNumberWrap");
+        const number = document.getElementById("newColumnNumber");
+
+        if (!topic || !wrap || !number) return;
+
+        const needNumber = [
+            "Практична робота",
+            "Лабораторна робота",
+            "Семінарське заняття"
+        ];
+
+        function toggleNumber() {
+            const show = needNumber.includes(topic.value);
+            wrap.style.display = show ? "" : "none";
+            number.required = show;
+            if (!show) number.value = "";
         }
 
-        const journals = await response.json();
-
-        console.log("Journals:", journals);
-
-        journalSelect.innerHTML = "";
-
-        if (journals.length === 0) {
-            journalSelect.innerHTML =
-                '<option value="">Журнали відсутні</option>';
-            return;
-        }
-
-        journals.forEach(journal => {
-
-            const option = document.createElement("option");
-
-            option.value = journal.id;
-            option.textContent = journal.name;
-
-            journalSelect.appendChild(option);
-
-        });
-
-    }
-    catch (e) {
-
-        console.error("Fetch failed:", e);
-
-        journalSelect.innerHTML =
-            '<option value="">Помилка завантаження</option>';
-
-    }
-
-        });
-
-    }
+        topic.addEventListener("change", toggleNumber);
+        toggleNumber();
+    });
 </script>
+
+@functions {
+    // Прибирає технічний суфікс " #N" з відображення теми — лише для типів,
+    // де номер потрібен тільки для унікальності колонки, а не як інформація для викладача.
+    private static readonly string[] HiddenNumberTopics = { "Лекція" };
+
+    private static string DisplayTopic(string? topic)
+    {
+        if (string.IsNullOrWhiteSpace(topic)) return "";
+
+        var t = topic.Trim();
+
+        // колонка без назви: технічний ключ виду "#2", "#3" — показуємо як порожню
+        if (System.Text.RegularExpressions.Regex.IsMatch(t, @"^#\d+$"))
+            return "";
+
+        foreach (var baseTopic in HiddenNumberTopics)
+        {
+            if (t == baseTopic) return t;
+
+            if (t.StartsWith(baseTopic + " #", StringComparison.Ordinal))
+                return baseTopic;
+        }
+
+        return t;
+    }
+}

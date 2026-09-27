@@ -50,13 +50,14 @@ public class CalendarModel : PageModel
 
         // === Учебный период: 1 сентября (академ. стартовый год) -> 30 июня (следующий год)
         var now = DateTime.Now;
-        var academicStartYear = (now.Month >= 7) ? now.Year : now.Year-1;
+        var academicStartYear = (now.Month >= 7) ? now.Year : now.Year - 1;
 
         var sept1 = new DateTime(academicStartYear, 9, 1);
         var juneEnd = new DateTime(academicStartYear + 1, 6, DateTime.DaysInMonth(academicStartYear + 1, 6));
 
-        var periodStart = NextMondayOrSame(sept1);
-        var periodEnd = EndOfWeekSunday(juneEnd);
+        // Недели — фіксовані блоки по 7 днів від 1 вересня: 1–7, 8–14, 15–21 і т.д.
+        var periodStart = sept1.Date;
+        var periodEnd = juneEnd.Date;
 
         // Тянем события по двум годам
         var evY1 = await _httpClient.GetFromJsonAsync<List<AcademicEvent>>(
@@ -69,12 +70,15 @@ public class CalendarModel : PageModel
             .Where(e => e.StartDate.Date >= sept1.Date && e.EndDate.Date <= periodEnd.Date)
             .ToList();
 
-        // Строим сетку недель Пн–Вс
+        // Строим сетку недель: кожен блок — рівно 7 днів (крім, можливо, останнього, якщо
+        // період не ділиться націло — тоді він коротший)
         var fullYearEvents = new List<AcademicEvent>();
         int weekIndex = 1;
+
         for (var weekStart = periodStart; weekStart <= periodEnd; weekStart = weekStart.AddDays(7), weekIndex++)
         {
-            var weekEnd = EndOfWeekSunday(weekStart);
+            var weekEnd = weekStart.AddDays(6);
+            if (weekEnd > periodEnd) weekEnd = periodEnd;
 
             var existing = existingEvents.FirstOrDefault(e =>
                 e.StartDate.Date == weekStart.Date && e.EndDate.Date == weekEnd.Date);
@@ -123,19 +127,6 @@ public class CalendarModel : PageModel
         }
 
         return Page();
-
-        // ====== Локальные функции (без отката в август) ======
-        static DateTime NextMondayOrSame(DateTime date)
-        {
-            int diff = ((int)DayOfWeek.Monday - (int)date.DayOfWeek + 7) % 7;
-            return date.Date.AddDays(diff);
-        }
-
-        static DateTime EndOfWeekSunday(DateTime date)
-        {
-            int shiftToSunday = ((int)DayOfWeek.Sunday - (int)date.DayOfWeek + 7) % 7;
-            return date.Date.AddDays(shiftToSunday);
-        }
     }
 
     public async Task<IActionResult> OnPostAsync()

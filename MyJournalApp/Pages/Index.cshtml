@@ -51,17 +51,34 @@
 <h2 class="mb-4">Розклад</h2>
 <p class="text-muted">@Model.SelectedDate.ToString("dddd, dd MMMM yyyy", ukCulture)</p>
 <div class="d-flex justify-content-between align-items-center mb-3">
+    @if (isAdmin || isDirector)
+{
+    <form method="get" class="d-flex align-items-center gap-2">
+        <select name="SelectedGroupId"
+                class="form-select"
+                onchange="this.form.submit()">
+
+            @if (isDirector)
+            {
+                <option value="">📅 Мій розклад</option>
+            }
+
+            @foreach (var group in Model.AllGroups.OrderBy(g => g.Name))
+            {
+                <option value="@group.Id"
+                        selected="@(group.Id == Model.SelectedGroupId)">
+                    @group.Name
+                </option>
+            }
+        </select>
+
+        <input type="hidden"
+               name="SelectedDate"
+               value="@Model.SelectedDate.ToString("yyyy-MM-dd")" />
+    </form>
+}
     @if (isAdmin)
     {
-        <form method="get" class="d-flex align-items-center gap-2">
-            <select name="SelectedGroupId" class="form-select" onchange="this.form.submit()">
-                @foreach (var group in Model.AllGroups.OrderBy(g => g.Name))
-                {
-                    <option value="@group.Id" selected="@(group.Id == Model.SelectedGroupId)">@group.Name</option>
-                }
-            </select>
-            <input type="hidden" name="SelectedDate" value="@Model.SelectedDate.ToString("yyyy-MM-dd")" />
-        </form>
         <div class="d-flex align-items-center gap-2">
             <button class="btn btn-outline-dark" data-bs-toggle="modal" data-bs-target="#exportHoursModal">
                 ⬇️ Витягнути години
@@ -263,6 +280,7 @@ else
                 <th>Пара</th>
                 <th>Час</th>
                 <th>Предмет</th>
+                <th>№</th>
                 <th>Години</th>
                 <th>Тема</th>
                 <th>Домашнє завдання</th>
@@ -315,7 +333,9 @@ else
                             }
                         }
                     </td>
-
+                    <td>
+                        @(lesson.Number?.ToString() ?? "–")
+                    </td>
                     <td>
                         @if (lesson.Clocks.HasValue && lesson.Clocks.Value > 0)
                         {
@@ -348,7 +368,8 @@ else
                                     data-lesson-homework="@lesson.Homework"
                                     data-lesson-group="@lesson.GroupId"
                                     data-lesson-date="@lesson.StartTime.ToString("yyyy-MM-ddTHH:mm")"
-                                    data-lesson-clocks="@(lesson.Clocks?.ToString() ?? "")">
+                                    data-lesson-clocks="@(lesson.Clocks?.ToString() ?? "")"
+                                    data-lesson-number="@(lesson.Number?.ToString() ?? "")">
                                 📝 Редагувати тему / ДЗ
                             </button>
                         }
@@ -769,16 +790,19 @@ else
             const editModal = document.getElementById('editLessonModal');
             if (!editModal) return;
             editModal.addEventListener('show.bs.modal', function (event) {
-                const button = event.relatedTarget;
-                if (!button) return;
-                editModal.querySelector('input[name="InputLesson.Id"]').value        = button.getAttribute('data-lesson-id');
-                editModal.querySelector('input[name="InputLesson.GroupId"]').value   = button.getAttribute('data-lesson-group');
-                editModal.querySelector('input[name="InputLesson.StartTime"]').value = button.getAttribute('data-lesson-date');
-                editModal.querySelector('input[name="InputLesson.Topic"]').value     = button.getAttribute('data-lesson-topic') || "";
-                editModal.querySelector('textarea[name="InputLesson.Homework"]').value = button.getAttribute('data-lesson-homework') || "";
-                const clocksInput = editModal.querySelector('input[name="InputLesson.Clocks"]');
-                if (clocksInput) clocksInput.value = button.getAttribute('data-lesson-clocks') || "";
-            });
+    const button = event.relatedTarget;
+    if (!button) return;
+    editModal.querySelector('input[name="InputLesson.Id"]').value        = button.getAttribute('data-lesson-id');
+    editModal.querySelector('input[name="InputLesson.GroupId"]').value   = button.getAttribute('data-lesson-group');
+    editModal.querySelector('input[name="InputLesson.StartTime"]').value = button.getAttribute('data-lesson-date');
+    editModal.querySelector('input[name="InputLesson.Topic"]').value     = button.getAttribute('data-lesson-topic') || "";
+    editModal.querySelector('textarea[name="InputLesson.Homework"]').value = button.getAttribute('data-lesson-homework') || "";
+    const clocksInput = editModal.querySelector('input[name="InputLesson.Clocks"]');
+    if (clocksInput) clocksInput.value = button.getAttribute('data-lesson-clocks') || "";
+
+    const numberInput = editModal.querySelector('input[name="InputLesson.Number"]');
+    if (numberInput) numberInput.value = button.getAttribute('data-lesson-number') || "";
+});
         });
 
         // ---- Modal: Change Teacher (admin) ----

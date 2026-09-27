@@ -34,7 +34,11 @@ public class LessonImportService : ILessonImportService
         if (rangeEnd < rangeStart)
             throw new ArgumentException("Кінцева дата раніше за початкову.");
 
-        var anchorMonday = StartOfWeekMonday(rangeStart);
+        // Якір для парності чисельник/знаменник — саме обрана дата початку,
+        // а не понеділок її тижня. Якщо навчальний рік починається у вівторок
+        // (наприклад, 1 вересня), тиждень для розрахунку парності триває
+        // вівторок → понеділок, а не пн → нд.
+        var anchorDate = rangeStart;
 
         var allExistingLessons =
             await _lessonRepository.GetLessonsByGroupIdAsync(dto.GroupId);
@@ -46,7 +50,7 @@ public class LessonImportService : ILessonImportService
             {
                 var weekNumber =
                     (int)Math.Floor(
-                        (l.StartTime.Date - anchorMonday).TotalDays / 7.0);
+                        (l.StartTime.Date - anchorDate).TotalDays / 7.0);
 
                 var isNumeratorWeek = weekNumber % 2 == 0;
 
@@ -131,7 +135,7 @@ public class LessonImportService : ILessonImportService
                     await ParseCell(
                         value,
                         dto,
-                        anchorMonday,
+                        anchorDate,
                         rangeStart,
                         rangeEnd,
                         currentPair,
@@ -152,12 +156,7 @@ public class LessonImportService : ILessonImportService
             Count = lessons.Count
         };
     }
-    private static DateTime StartOfWeekMonday(DateTime date)
-    {
-        var d = date.Date;
-        int diff = (7 + (int)d.DayOfWeek - (int)DayOfWeek.Monday) % 7;
-        return d.AddDays(-diff);
-    }
+
     private static (int numeratorRow, int denominatorRow, int lastRow)
     FindSectionRows(IXLWorksheet worksheet)
     {
@@ -198,7 +197,7 @@ public class LessonImportService : ILessonImportService
     private async Task<IEnumerable<Lesson>> ParseCell(
     string cellValue,
     ImportLessonsDto dto,
-    DateTime anchorMonday,
+    DateTime anchorDate,
     DateTime rangeStart,
     DateTime rangeEnd,
     string pairNum,
@@ -241,7 +240,7 @@ public class LessonImportService : ILessonImportService
                     teachers[i],
                     null,
                     dto,
-                    anchorMonday,
+                    anchorDate,
                     rangeStart,
                     rangeEnd,
                     pairNum,
@@ -258,7 +257,7 @@ public class LessonImportService : ILessonImportService
                     teacher,
                     null,
                     dto,
-                    anchorMonday,
+                    anchorDate,
                     rangeStart,
                     rangeEnd,
                     pairNum,
@@ -273,7 +272,7 @@ public class LessonImportService : ILessonImportService
                 teachers.First(),
                 null,
                 dto,
-                anchorMonday,
+                anchorDate,
                 rangeStart,
                 rangeEnd,
                 pairNum,
@@ -287,7 +286,7 @@ public class LessonImportService : ILessonImportService
     string teacher1,
     string? teacher2,
     ImportLessonsDto dto,
-    DateTime anchorMonday,
+    DateTime anchorDate,
     DateTime rangeStart,
     DateTime rangeEnd,
     string pairNum,
@@ -310,7 +309,7 @@ public class LessonImportService : ILessonImportService
         for (var d = first; d <= rangeEnd.Date; d = d.AddDays(7))
         {
             var weekNumber =
-                (int)Math.Floor((d.Date - anchorMonday.Date).TotalDays / 7.0);
+                (int)Math.Floor((d.Date - anchorDate.Date).TotalDays / 7.0);
 
             var isNumeratorWeek = (weekNumber % 2) == 0;
 

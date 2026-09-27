@@ -43,6 +43,8 @@ public class JournalModel : PageModel
         public Guid? NewTeacherId { get; set; }
 
     }
+    [BindProperty(SupportsGet = true)]
+    public bool ShowAllJournals { get; set; }
     // ✅ Діапазон для Student (передається в query): /Journal?from=2026-02-01&to=2026-02-10
     [BindProperty(SupportsGet = true)]
     public DateOnly? From { get; set; }
@@ -111,6 +113,7 @@ public class JournalModel : PageModel
 
     public async Task<IActionResult> OnGetAsync(Guid? selectedJournalId = null)
     {
+        Console.WriteLine($"ShowAllJournals = {ShowAllJournals}");
         var token = Request.Cookies["cookies"];
         if (string.IsNullOrEmpty(token)) return RedirectToPage("/Account/Login");
         _httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
@@ -163,22 +166,31 @@ public class JournalModel : PageModel
                 }
 
             case "Teacher":
+
+                CurrentTeacher = await _httpClient
+                    .GetFromJsonAsync<Teacher>(
+                        ApiUrl($"/api/User/teacher-model/{UserId}"));
+
                 await LoadTeacherBaseData();
 
-                CurrentTeacher = await _httpClient.GetFromJsonAsync<Teacher>(ApiUrl($"/api/User/teacher-model/{UserId}"));
-
-                if (CurrentTeacher?.IsDirector == true)
+                if (CurrentTeacher?.IsDirector == true && ShowAllJournals)
                 {
-                    await LoadAdminBaseData();
+                    var allJournals =
+                        await _httpClient.GetFromJsonAsync<List<JournalEntry>>(
+                            ApiUrl("/api/Journal/all"))
+                        ?? new();
 
-                    DirectorTeachers = Users
-                        .Where(x => x.Role == "Teacher")
-                        .OrderBy(x => x.FullName)
-                        .ToList();
-                }
-                else
-                {
-                    await LoadTeacherBaseData();
+                    Journals = allJournals;
+
+                    var groups =
+                        await _httpClient.GetFromJsonAsync<List<Group>>(
+                            ApiUrl("/api/Group/all"))
+                        ?? new();
+
+                    GroupNames.Clear();
+
+                    foreach (var group in groups)
+                        GroupNames[group.Id] = group.Name;
                 }
 
                 break;
@@ -739,6 +751,9 @@ public class JournalModel : PageModel
             return RedirectToPage(new { selectedJournalId = SelectedJournalId });
         }
 
+        // ✅ Порожня тема дозволена — колонка створюється без назви
+        var isEmptyTopic = string.IsNullOrWhiteSpace(topic);
+
         // журнал и студенты
         var journalResp = await _httpClient.GetAsync(ApiUrl($"/api/Journal/{SelectedJournalId}"));
         if (!journalResp.IsSuccessStatusCode)
@@ -757,20 +772,68 @@ public class JournalModel : PageModel
             ? await existingResp.Content.ReadFromJsonAsync<List<Grade>>() ?? new()
             : new List<Grade>();
 
-        // --- вычисляем итоговую тему с автонумерацией ---
-        var sameDayTopics = existingGrades
-            .Where(g => g.Created.Date == date.Date)
-            .Select(g => g.Comment ?? "")
-            .ToList();
+        var numberedTopics = new[]
+        {
+        "Практична робота",
+        "Лабораторна робота",
+        "Семінарське заняття"
+    };
 
         var finalTopic = topic;
-        if (sameDayTopics.Contains(topic))
+
+        if (!isEmptyTopic && numberedTopics.Contains(topic))
         {
-            int counter = 2;
-            while (sameDayTopics.Contains($"{topic} #{counter}"))
-                counter++;
-            finalTopic = $"{topic} #{counter}";
+            var numberStr = Request.Form["NewColumn.Number"].ToString();
+
+            if (!int.TryParse(numberStr, out var number) || number <= 0)
+            {
+                FlashMessage = "Вкажіть коректний номер заняття.";
+                return RedirectToPage(new { selectedJournalId = SelectedJournalId });
+            }
+
+            finalTopic = $"{topic} #{number}";
         }
+        else
+        {
+            // Автонумерація для повторюваних тем на цю дату (в т.ч. "Лекція" та порожня тема) —
+            // потрібна лише технічно, щоб TopicKey був унікальним і колонки не зливались.
+            // Номер НЕ показується в інтерфейсі (див. DisplayTopic у Journal.cshtml).
+            var sameTopics = existingGrades
+                .Where(g => g.Created.Date == date.Date)
+                .Select(g => (g.Comment ?? "").Trim())
+                .Distinct()
+                .ToList();
+
+            // для порожньої теми варіанти: "" -> "#2" -> "#3"
+            // для звичайної:              "Лекція" -> "Лекція #2" -> "Лекція #3"
+            string Candidate(int n) => isEmptyTopic ? $"#{n}" : $"{topic} #{n}";
+
+            if (sameTopics.Contains(topic))
+            {
+                int counter = 2;
+
+                while (sameTopics.Contains(Candidate(counter)))
+                {
+                    counter++;
+                }
+
+                finalTopic = Candidate(counter);
+            }
+        }
+
+        var finalTopicKey = JournalColumn.MakeTopicKey(finalTopic);
+
+        // захист від подвійного кліку по кнопці "Створити"
+        var columnAlreadyExists = existingGrades.Any(g =>
+            g.Created.Date == date.Date &&
+            JournalColumn.MakeTopicKey(g.Comment) == finalTopicKey);
+
+        if (columnAlreadyExists)
+        {
+            FlashMessage = "Колонка з такою темою вже існує на цю дату.";
+            return RedirectToPage(new { selectedJournalId = SelectedJournalId });
+        }
+
         var stamp = date.Date.Add(DateTime.Now.TimeOfDay);
 
         bool hasError = false;
@@ -797,8 +860,6 @@ public class JournalModel : PageModel
             : "Колонку створено.";
         return RedirectToPage(new { selectedJournalId = SelectedJournalId });
     }
-
-
     public async Task<IActionResult> OnPostGenerateJournalsAsync()
     {
         if (Role != "Admin") return Forbid();
@@ -915,7 +976,6 @@ public class JournalModel : PageModel
 
                 existing.Comment = topic;
                 existing.TeacherId = UserId;
-                existing.Created = stamp; // колонка считается "новой"
 
                 var upd = await _httpClient.PutAsJsonAsync(ApiUrl($"/api/Grade/{existing.Id}"), existing);
                 if (!upd.IsSuccessStatusCode) hasError = true;
@@ -1236,25 +1296,11 @@ public class JournalModel : PageModel
         _httpClient.DefaultRequestHeaders.Authorization =
             new AuthenticationHeaderValue("Bearer", Request.Cookies["cookies"]);
 
-        var journalResp = await _httpClient.GetAsync(ApiUrl("/api/Journal/all"));
-        if (!journalResp.IsSuccessStatusCode)
+        var response = await _httpClient.DeleteAsync(ApiUrl("/api/Journal/all"));
+        if (!response.IsSuccessStatusCode)
         {
-            ModelState.AddModelError("", "Не вдалося отримати список журналів.");
+            ModelState.AddModelError("", "Не вдалося видалити журнали та оцінки.");
             return await OnGetAsync();
-        }
-
-        var journals = await journalResp.Content.ReadFromJsonAsync<List<JournalEntry>>();
-        foreach (var journal in journals ?? new())
-        {
-            var gradesResp = await _httpClient.GetAsync(ApiUrl($"/api/Grade/journal/{journal.Id}"));
-            if (gradesResp.IsSuccessStatusCode)
-            {
-                var grades = await gradesResp.Content.ReadFromJsonAsync<List<Grade>>();
-                foreach (var grade in grades ?? new())
-                    await _httpClient.DeleteAsync(ApiUrl($"/api/Grade/{grade.Id}"));
-            }
-
-            await _httpClient.DeleteAsync(ApiUrl($"/api/Journal/{journal.Id}"));
         }
 
         FlashMessage = "Усі журнали та оцінки успішно видалено.";

@@ -114,4 +114,13 @@ public class JournalController : ControllerBase
 
         return Ok(result);
     }
+    [Authorize(Roles = "Admin")]
+    [HttpDelete("all")]
+    public async Task<IActionResult> DeleteAll()
+    {
+        var result = await _journalService.DeleteAllAsync();
+        if (!result.Success)
+            return StatusCode(500, result.Message);
+        return NoContent();
+    }
 }

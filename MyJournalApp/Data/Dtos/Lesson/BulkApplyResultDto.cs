@@ -5,5 +5,6 @@
         public int Updated { get; set; }
 
         public int Deleted { get; set; }
+        public List<string> Errors { get; set; } = new();
     }
 }

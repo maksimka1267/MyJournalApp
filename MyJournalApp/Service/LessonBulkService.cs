@@ -23,6 +23,7 @@ namespace MyJournalApp.Service
 
             return await ApplyChangesAsync(dto, changes);
         }
+
         private sealed class SlotSignature
         {
             public TimeSpan Time { get; init; }
@@ -67,6 +68,7 @@ namespace MyJournalApp.Service
             public bool HasAny =>
                 SetName || SetTeacherId || SetSecondTeacherId || SetTopic || SetHomework || SetClocks;
         }
+
         private static void Validate(BulkApplyDto dto)
         {
             if (dto == null)
@@ -89,6 +91,7 @@ namespace MyJournalApp.Service
             if (groupIds.Count != 1)
                 throw new ArgumentException("Усі уроки мають бути однієї групи.");
         }
+
         private async Task<Dictionary<Guid, Lesson>> LoadBaselineAsync(BulkApplyDto dto)
         {
             var groupId = dto.Lessons.First().GroupId;
@@ -99,9 +102,10 @@ namespace MyJournalApp.Service
 
             return baseline.ToDictionary(x => x.Id, x => x);
         }
+
         private List<SlotChanges> BuildChanges(
-    BulkApplyDto dto,
-    Dictionary<Guid, Lesson> baseline)
+            BulkApplyDto dto,
+            Dictionary<Guid, Lesson> baseline)
         {
             var changes = new List<SlotChanges>();
 
@@ -158,12 +162,14 @@ namespace MyJournalApp.Service
 
             return changes;
         }
+
         private async Task<BulkApplyResultDto> ApplyChangesAsync(
-    BulkApplyDto dto,
-    List<SlotChanges> changes)
+            BulkApplyDto dto,
+            List<SlotChanges> changes)
         {
             int updated = 0;
             int deleted = 0;
+            var errors = new List<string>();
 
             var start = dto.StartDate.Date;
             var end = dto.EndDate.Date;
@@ -180,58 +186,74 @@ namespace MyJournalApp.Service
 
                 foreach (var change in changes)
                 {
-                    var target = dayLessons
-                        .FirstOrDefault(x => change.Signature.Matches(x));
-
-                    if (target == null)
-                        continue;
-
-                    if (change.Delete)
+                    try
                     {
-                        await _lessonRepository.Delete(target);
-                        deleted++;
-                        continue;
+                        var target = dayLessons
+                            .FirstOrDefault(x => change.Signature.Matches(x));
+
+                        if (target == null)
+                            continue;
+
+                        // Прибираємо знайдений урок з пулу цього дня, щоб наступні change
+                        // з тим самим/схожим сигнатурою (напр. два однакових предмети в один день)
+                        // не намагались повторно взяти вже оброблений/видалений урок.
+                        dayLessons.Remove(target);
+
+                        if (change.Delete)
+                        {
+                            await _lessonRepository.Delete(target);
+                            deleted++;
+                            continue;
+                        }
+
+                        var newValues = change.NewValues!;
+
+                        if (change.SetName)
+                            target.Name = newValues.Name;
+
+                        if (change.SetTeacherId)
+                        {
+                            if (newValues.TeacherId == Guid.Empty)
+                                throw new ArgumentException("Не обрано викладача.");
+
+                            target.TeacherId = newValues.TeacherId;
+                        }
+
+                        if (change.SetSecondTeacherId)
+                        {
+                            target.SecondTeacherId =
+                                newValues.SecondTeacherId.HasValue &&
+                                newValues.SecondTeacherId != Guid.Empty
+                                    ? newValues.SecondTeacherId
+                                    : null;
+                        }
+
+                        if (change.SetTopic)
+                            target.Topic = newValues.Topic;
+
+                        if (change.SetHomework)
+                            target.Homework = newValues.Homework;
+
+                        if (change.SetClocks)
+                            target.Clocks = newValues.Clocks;
+
+                        await _lessonRepository.Update(target);
+                        updated++;
                     }
-
-                    var newValues = change.NewValues!;
-
-                    if (change.SetName)
-                        target.Name = newValues.Name;
-
-                    if (change.SetTeacherId)
-                        target.TeacherId = newValues.TeacherId;
-
-                    if (change.SetSecondTeacherId)
+                    catch (Exception ex)
                     {
-                        target.SecondTeacherId =
-                            newValues.SecondTeacherId.HasValue &&
-                            newValues.SecondTeacherId != Guid.Empty
-                                ? newValues.SecondTeacherId
-                                : null;
+                        errors.Add(
+                            $"{date:yyyy-MM-dd} / {change.Signature.Name} ({change.Signature.Time}): {ex.Message}");
                     }
-
-                    if (change.SetTopic)
-                        target.Topic = newValues.Topic;
-
-                    if (change.SetHomework)
-                        target.Homework = newValues.Homework;
-
-                    if (change.SetClocks)
-                        target.Clocks = newValues.Clocks;
-
-                    await _lessonRepository.Update(target);
-                    updated++;
                 }
             }
-
-            await _lessonRepository.SaveChangesAsync();
 
             return new BulkApplyResultDto
             {
                 Updated = updated,
-                Deleted = deleted
+                Deleted = deleted,
+                Errors = errors
             };
         }
     }
-
 }

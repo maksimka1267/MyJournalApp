@@ -27,7 +27,8 @@ public class GroupsModel : PageModel
     [BindProperty] public string GroupName { get; set; } = "";
     [BindProperty] public Guid TeacherId { get; set; }
     [BindProperty] public ReportRequestModel Report { get; set; }
-
+    [BindProperty] public ChangeTeacherModel ChangeTeacher { get; set; }
+    [BindProperty] public DeleteGroupFileModel DeleteFile { get; set; }
     public class GroupWithDetails
     {
         public Group Group { get; set; } = null!;
@@ -60,6 +61,7 @@ public class GroupsModel : PageModel
             t => t.Id,
             t => string.IsNullOrWhiteSpace(t.FullName) ? "Без імені" : t.FullName
         );
+        AllTeachers = AllTeachers.OrderBy(t => string.IsNullOrWhiteSpace(t.FullName) ? "Без імені" : t.FullName).ToList();
 
         foreach (var group in groups)
         {
@@ -103,8 +105,57 @@ public class GroupsModel : PageModel
             "CreateGroup" => await CreateGroupAsync(),
             "GenerateReport" => await GenerateReportAsync(),
             "DeleteGroup" => await DeleteGroupAsync(id),
+            "ChangeTeacher" => await ChangeTeacherAsync(),
+            "DeleteGroupFile" => await DeleteGroupFileAsync(),
             _ => Page()
         };
+    }
+    private async Task<IActionResult> DeleteGroupFileAsync()
+    {
+        if (DeleteFile == null || DeleteFile.GroupId == Guid.Empty || (DeleteFile.Semester != 1 && DeleteFile.Semester != 2))
+        {
+            TempData["Error"] = "Невірні параметри видалення файлу.";
+            return RedirectToPage();
+        }
+
+        var resp = await _httpClient.DeleteAsync(ApiUrl($"/api/GroupFiles/{DeleteFile.GroupId}/{DeleteFile.Semester}"));
+        if (!resp.IsSuccessStatusCode)
+        {
+            var msg = await resp.Content.ReadAsStringAsync();
+            TempData["Error"] = string.IsNullOrWhiteSpace(msg) ? "Не вдалося видалити файл." : msg;
+            return RedirectToPage();
+        }
+
+        TempData["Success"] = "Файл видалено.";
+        return RedirectToPage();
+    }
+    private async Task<IActionResult> ChangeTeacherAsync()
+    {
+        if (ChangeTeacher == null || ChangeTeacher.GroupId == Guid.Empty || ChangeTeacher.TeacherId == Guid.Empty)
+        {
+            TempData["Error"] = "Оберіть куратора.";
+            return RedirectToPage();
+        }
+
+        // подгружаем текущую группу, чтобы не затереть Name/StudentIds при PUT
+        var group = await _httpClient.GetFromJsonAsync<Group>(ApiUrl($"/api/Group/{ChangeTeacher.GroupId}"));
+        if (group == null)
+        {
+            TempData["Error"] = "Групу не знайдено.";
+            return RedirectToPage();
+        }
+
+        group.TeacherId = ChangeTeacher.TeacherId;
+
+        var resp = await _httpClient.PutAsJsonAsync(ApiUrl($"/api/Group/{ChangeTeacher.GroupId}"), group);
+        if (!resp.IsSuccessStatusCode)
+        {
+            TempData["Error"] = "Не вдалося змінити куратора.";
+            return RedirectToPage();
+        }
+
+        TempData["Success"] = "Куратора змінено.";
+        return RedirectToPage();
     }
     private async Task<IActionResult> UploadGroupFileAsync()
     {
@@ -233,7 +284,16 @@ public class GroupsModel : PageModel
         return $"{Request.Scheme}://{Request.Host}{path}";
     }
 }
-
+public class DeleteGroupFileModel
+{
+    public Guid GroupId { get; set; }
+    public int Semester { get; set; }
+}
+public class ChangeTeacherModel
+{
+    public Guid GroupId { get; set; }
+    public Guid TeacherId { get; set; }
+}
 // Модели
 public class GroupExcelImportModel
 {

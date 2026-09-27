@@ -30,11 +30,10 @@ public class Repository<T> : IRepository<T> where T : class
         return Task.CompletedTask;
     }
 
-    public Task Update(T entity)
+    public async Task Update(T entity)
     {
         _dbSet.Update(entity);
-        _context.SaveChangesAsync();
-        return Task.CompletedTask;
+        await _context.SaveChangesAsync();
     }
 
     public Task UpdateRange(IEnumerable<T> entities)
@@ -43,17 +42,15 @@ public class Repository<T> : IRepository<T> where T : class
         return Task.CompletedTask;
     }
 
-    public Task Delete(T entity)
+    public async Task Delete(T entity)
     {
         _dbSet.Remove(entity);
-        _context.SaveChangesAsync();
-        return Task.CompletedTask;
+        await _context.SaveChangesAsync();
     }
 
     public async Task DeleteAllAsync()
     {
-        _dbSet.RemoveRange(_dbSet);
-        await _context.SaveChangesAsync();
+        await _dbSet.ExecuteDeleteAsync();
     }
 
     public Task SaveChangesAsync()

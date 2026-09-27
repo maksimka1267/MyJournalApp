@@ -74,6 +74,11 @@ namespace MyJournalApp.Service
 
             return IServiceResult.Ok();
         }
-
+        public async Task<IServiceResult> DeleteAllAsync()
+        {
+            await _gradeRepository.DeleteAllAsync();   // сначала оценки — FK на журнал
+            await _journalRepository.DeleteAllAsync(); // потом журналы
+            return IServiceResult.Ok();
+        }
     }
 }

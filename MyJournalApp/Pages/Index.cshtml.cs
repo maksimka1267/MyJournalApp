@@ -1,6 +1,7 @@
 ﻿using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
+using MyJournalApp.Data.Dtos.Lesson;
 using MyJournalApp.Data.Models;
 using System.Net.Http.Headers;
 using System.Security.Claims;
@@ -171,7 +172,7 @@ public class IndexModel : PageModel
             }
         }
 
-        if (SelectedGroupId == Guid.Empty && AllGroups.Any())
+        if (!isDirector && SelectedGroupId == Guid.Empty && AllGroups.Any())
         {
             AllGroups = AllGroups.OrderBy(g => g.Name).ToList();
             SelectedGroupId = AllGroups.First().Id;
@@ -187,7 +188,7 @@ public class IndexModel : PageModel
                 DayLessons = JsonSerializer.Deserialize<List<Lesson>>(json, new JsonSerializerOptions { PropertyNameCaseInsensitive = true }) ?? new();
             }
         }
-        else if (Role == "Teacher" && !isDirector) { 
+        else if (Role == "Teacher") { 
             var groupResponse = await client.GetAsync(ApiUrl("/api/Group/all"));
             if (groupResponse.IsSuccessStatusCode)
             {
@@ -390,7 +391,7 @@ public class IndexModel : PageModel
             contentType,
             fileName.Trim('"'));
     }
-    
+
     private async Task ApplyBulkChangesAsync()
     {
         var token = Request.Cookies["cookies"];
@@ -418,7 +419,11 @@ public class IndexModel : PageModel
 
         var dayUrl = ApiUrl($"/api/Lesson/group/{SelectedGroupId}/date/{startDate:yyyy-MM-dd}");
         var resp = await client.GetAsync(dayUrl);
-        if (!resp.IsSuccessStatusCode) return;
+        if (!resp.IsSuccessStatusCode)
+        {
+            TempData["ErrorMessage"] = "Не вдалося завантажити уроки базового дня.";
+            return;
+        }
 
         var json = await resp.Content.ReadAsStringAsync();
         var dayLessons = JsonSerializer.Deserialize<List<Lesson>>(json,
@@ -428,6 +433,7 @@ public class IndexModel : PageModel
 
         // 4) Собираем payload из BulkApplyLessonDto, с ФОЛБЭКОМ по Id
         var payloadLessons = new List<BulkApplyLessonDto>();
+        var buildErrors = new List<string>();
 
         foreach (var ch in changes)
         {
@@ -436,12 +442,26 @@ public class IndexModel : PageModel
             {
                 // Фикс: если Id не из базового дня — добираем урок напрямую по Id
                 var byIdResp = await client.GetAsync(ApiUrl($"/api/Lesson/{ch.Id}"));
-                if (!byIdResp.IsSuccessStatusCode) continue;
+                if (!byIdResp.IsSuccessStatusCode)
+                {
+                    buildErrors.Add($"Урок {ch.Id}: не вдалося завантажити базові дані.");
+                    continue;
+                }
 
                 var js = await byIdResp.Content.ReadAsStringAsync();
                 baseLesson = JsonSerializer.Deserialize<Lesson>(js, new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
-                if (baseLesson == null) continue;
+                if (baseLesson == null)
+                {
+                    buildErrors.Add($"Урок {ch.Id}: не вдалося розпізнати дані уроку.");
+                    continue;
+                }
             }
+
+            // Захист: якщо прийшов порожній TeacherId (наприклад, обрали пустий пункт списку) —
+            // не даємо йому потрапити в payload, інакше на бекенді впаде FK-обмеження
+            var teacherId = (ch.TeacherId.HasValue && ch.TeacherId.Value != Guid.Empty)
+                ? ch.TeacherId.Value
+                : baseLesson.TeacherId;
 
             var dto = new BulkApplyLessonDto
             {
@@ -455,7 +475,7 @@ public class IndexModel : PageModel
                 Topic = ch.Topic ?? baseLesson.Topic,
                 Homework = ch.Homework ?? baseLesson.Homework,
                 Clocks = ch.Clocks.HasValue ? ch.Clocks : baseLesson.Clocks,
-                TeacherId = ch.TeacherId ?? baseLesson.TeacherId,
+                TeacherId = teacherId,
                 SecondTeacherId = baseLesson.SecondTeacherId,
 
                 Delete = ch.Delete == true
@@ -464,7 +484,12 @@ public class IndexModel : PageModel
             payloadLessons.Add(dto);
         }
 
-        if (payloadLessons.Count == 0) return;
+        if (payloadLessons.Count == 0)
+        {
+            if (buildErrors.Count > 0)
+                TempData["ErrorMessage"] = string.Join("; ", buildErrors);
+            return;
+        }
 
         var payload = new
         {
@@ -474,7 +499,30 @@ public class IndexModel : PageModel
         };
 
         var content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json");
-        await client.PostAsync(ApiUrl("/api/Lesson/bulk-apply"), content);
+        var applyResp = await client.PostAsync(ApiUrl("/api/Lesson/bulk-apply"), content);
+
+        var allErrors = new List<string>(buildErrors);
+
+        if (!applyResp.IsSuccessStatusCode)
+        {
+            var body = await applyResp.Content.ReadAsStringAsync();
+            allErrors.Add($"Не вдалося застосувати зміни: {body}");
+        }
+        else
+        {
+            var resultJson = await applyResp.Content.ReadAsStringAsync();
+            var result = JsonSerializer.Deserialize<BulkApplyResultDto>(resultJson,
+                new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+
+            if (result?.Errors?.Count > 0)
+                allErrors.AddRange(result.Errors);
+
+            TempData["SuccessMessage"] =
+                $"Оновлено: {result?.Updated ?? 0}, видалено: {result?.Deleted ?? 0}.";
+        }
+
+        if (allErrors.Count > 0)
+            TempData["ErrorMessage"] = string.Join("; ", allErrors);
     }
 
     private async Task ChangeTeacherAsync(HttpClient client)

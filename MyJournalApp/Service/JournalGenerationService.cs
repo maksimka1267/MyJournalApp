@@ -5,7 +5,10 @@ using System.Collections.Generic;
 
 public interface IJournalGenerationService
 {
-    Task<GenerationResult> GenerateJournalsFromScheduleAsync();
+    // semesterOverride: необов'язковий параметр, щоб за потреби можна було
+    // явно перегенерувати журнали для конкретного семестру ("1 семестр 2025/2026").
+    // Якщо null — використовується поточний семестр (за поточною датою).
+    Task<GenerationResult> GenerateJournalsFromScheduleAsync(string? semesterOverride = null);
 }
 
 public class JournalGenerationService : IJournalGenerationService
@@ -24,8 +27,25 @@ public class JournalGenerationService : IJournalGenerationService
         _journalRepo = journalRepo;
     }
 
-    public async Task<GenerationResult> GenerateJournalsFromScheduleAsync()
+    public async Task<GenerationResult> GenerateJournalsFromScheduleAsync(string? semesterOverride = null)
     {
+        // 0) Визначаємо семестр, для якого генеруємо журнали.
+        // Це ключовий фікс: раніше метод обробляв ВСІ уроки з бази (в т.ч. за минулі
+        // навчальні роки), тому що семестр рахувався окремо для кожного уроку і
+        // ніде не звірявся з поточною датою. Через це створювались журнали і за
+        // старі семестри, для яких їх ще не було.
+        var targetSemester = semesterOverride ?? GetSemesterForDate(DateTime.UtcNow);
+
+        if (targetSemester == "Міжсезоння")
+        {
+            return new GenerationResult
+            {
+                Success = true,
+                CreatedCount = 0,
+                Message = "Зараз міжсезоння (літні місяці) — генерація журналів не виконується."
+            };
+        }
+
         // 1) Групи з розкладом
         var groupsWithLessons = await _groupRepo.GetGroupsWithLessonsAsync();
         if (groupsWithLessons == null || !groupsWithLessons.Any())
@@ -44,7 +64,8 @@ public class JournalGenerationService : IJournalGenerationService
         if (relevantLessons.Count == 0)
             return new GenerationResult { Success = true, CreatedCount = 0, Message = "Немає уроків для обраних груп." };
 
-        // 3) Рахуємо SubjectNorm + Semester ДЛЯ КОЖНОГО уроку і групуємо з урахуванням семестру
+        // 3) Рахуємо SubjectNorm + Semester ДЛЯ КОЖНОГО уроку, але залишаємо
+        // тільки уроки цільового семестру (targetSemester) — не всю історію.
         var lessonGroups = relevantLessons
             .Select(l => new
             {
@@ -53,8 +74,18 @@ public class JournalGenerationService : IJournalGenerationService
                 Semester = GetSemesterForDate(l.StartTime)
             })
             .Where(x => !string.IsNullOrWhiteSpace(x.SubjectNorm))
-            .Where(x => x.Semester != "Міжсезоння") // якщо треба генерувати і міжсезоння — прибери цю строку
+            .Where(x => x.Semester == targetSemester)
             .GroupBy(x => new { x.Lesson.GroupId, x.SubjectNorm, x.Semester });
+
+        if (!lessonGroups.Any())
+        {
+            return new GenerationResult
+            {
+                Success = true,
+                CreatedCount = 0,
+                Message = $"Немає уроків для семестру \"{targetSemester}\"."
+            };
+        }
 
         // 4) Витягаємо існуючі журнали для цих груп
         // Очікується: List<(Guid GroupId, string Name)>
@@ -128,7 +159,7 @@ public class JournalGenerationService : IJournalGenerationService
         {
             Success = true,
             CreatedCount = journalsToCreate.Count,
-            Message = $"Операцію завершено. Створено нових журналів: {journalsToCreate.Count}."
+            Message = $"Операцію завершено для семестру \"{targetSemester}\". Створено нових журналів: {journalsToCreate.Count}."
         };
     }
 
